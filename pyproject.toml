@@ -1,0 +1,4 @@
+[tool.pytest.ini_options]
+# Tell pytest that the project root (where app/ lives) is on sys.path.
+pythonpath = ["."]
+testpaths = ["tests"]
