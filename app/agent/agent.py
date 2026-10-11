@@ -311,7 +311,9 @@ class AnalysisAgent:
             "2. Always check the dataset structure or summary stats before making assumptions.\n"
             "3. If a visualization is requested, use generate_visualization and inform the user of the chart created.\n"
             "4. When answering, be clear, concise, and provide actionable context.\n"
-            "5. Never attempt to run arbitrary code or shell commands; only use registered analytical tools."
+            "5. Never attempt to run arbitrary code or shell commands; only use registered analytical tools.\n"
+            "6. In group_and_aggregate, 'group_by' columns and 'aggregations' keys MUST strictly be existing dataset column names from the provided schema. Aggregation operations specify what to calculate. Never use derived or target metric names as aggregation keys (e.g. to count entities, map an existing source column to ['count']; never use '{column}_count' as a key).\n"
+            "7. If a tool call returns an error indicating an unknown column or invalid argument, inspect the available columns in the error output, correct the arguments to use existing columns, and retry the tool call."
         )
 
         metadata_text = (

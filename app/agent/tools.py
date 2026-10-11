@@ -216,14 +216,16 @@ TOOL_SCHEMAS = [
                     "group_by": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "List of column names to group by.",
+                        "description": "List of existing column names from the dataset to group by.",
                         "minItems": 1,
                     },
                     "aggregations": {
                         "type": "object",
                         "description": (
-                            "Mapping of column names to lists of aggregation operations, "
-                            "e.g. {'salary': ['mean', 'max'], 'employee_id': ['count']}."
+                            "Mapping of existing dataset column names to lists of aggregation operations, "
+                            "e.g. {'salary': ['mean'], 'employee': ['count']}. "
+                            "Every key MUST be an existing source column name in the dataset (NOT a derived name like 'employee_count'). "
+                            "The operations in the list specify what to calculate on that source column."
                         ),
                         "additionalProperties": {
                             "type": "array",
@@ -357,6 +359,13 @@ def execute_tool(
             return to_json_safe(res), res
 
     except Exception as exc:
-        return {"status": "error", "error": str(exc)}, None
+        err_msg = str(exc)
+        if tool_name == "group_and_aggregate" and "Aggregation column" in err_msg and "does not exist" in err_msg:
+            err_msg += (
+                ". Note: aggregation keys must be existing column names from the dataset "
+                "(aggregation operations specify what to calculate, e.g. use an existing column with 'count'). "
+                "Please retry with valid column names."
+            )
+        return {"status": "error", "error": err_msg}, None
 
     return {"status": "error", "error": f"Unhandled tool '{tool_name}'"}, None

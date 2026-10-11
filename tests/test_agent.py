@@ -6,6 +6,7 @@ All tests use a mocked OpenAI client and run completely offline without requirin
 a real API key or making network requests.
 """
 
+from pathlib import Path
 from unittest.mock import MagicMock
 import json
 import numpy as np
@@ -23,6 +24,7 @@ from app.agent import (
 )
 from app.agent.agent import build_dataset_metadata, _parse_tool_arguments, _validate_tool_call_entry
 from app.agent.tools import to_json_safe, REGISTERED_TOOL_NAMES
+from app.analysis import group_and_aggregate
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -810,3 +812,215 @@ def test_agent_malformed_tc_missing_function_name_breaks_loop(sample_df):
     assert result.error is not None
     assert result.answer == ""
     assert result.rounds == 1
+
+
+# ── 11. Bug 2 Regression Tests: Grouping & Aggregation Argument Mapping & Recovery ────
+
+@pytest.fixture
+def ground_truth_20x6_df():
+    """Ground truth DataFrame: 20 rows, 6 columns matching user test scenario."""
+    csv_file = Path(__file__).resolve().parent.parent / "ground_truth_20x6.csv"
+    if csv_file.is_file():
+        return pd.read_csv(csv_file)
+    data = []
+    # 10 employees in Alpha (mean salary 1550.0)
+    for i in range(1, 11):
+        data.append({
+            "employee": f"E{i:02d}",
+            "department": "Alpha",
+            "experience_years": i,
+            "salary": 1100.0 + (i - 1) * 100.0,
+            "performance_score": 60 + i,
+            "hours_per_week": 40,
+        })
+    # 10 employees in Beta (mean salary 2550.0)
+    for i in range(11, 21):
+        data.append({
+            "employee": f"E{i:02d}",
+            "department": "Beta",
+            "experience_years": i,
+            "salary": 2100.0 + (i - 11) * 100.0,
+            "performance_score": 75 + (i - 10),
+            "hours_per_week": 40,
+        })
+    return pd.DataFrame(data)
+
+
+def test_group_and_aggregate_direct_intended_arguments(ground_truth_20x6_df):
+    """Bug 2 regression: verify group_and_aggregate directly with intended arguments on 20x6 dataset."""
+    res = group_and_aggregate(
+        ground_truth_20x6_df,
+        group_by=["department"],
+        aggregations={
+            "employee": ["count"],
+            "salary": ["mean"],
+        },
+    )
+    assert res["group_count"] == 2
+    results = {row["department"]: row for row in res["results"]}
+
+    assert "Alpha" in results
+    assert results["Alpha"]["employee_count"] == 10
+    assert results["Alpha"]["salary_mean"] == 1550.0
+
+    assert "Beta" in results
+    assert results["Beta"]["employee_count"] == 10
+    assert results["Beta"]["salary_mean"] == 2550.0
+
+
+def test_group_and_aggregate_preserves_invalid_column_validation(ground_truth_20x6_df):
+    """Bug 2 regression: preserve strict validation against invalid column names like 'employee_count'."""
+    # 1. Direct function raises ValueError
+    with pytest.raises(ValueError, match="Aggregation column 'employee_count' does not exist"):
+        group_and_aggregate(
+            ground_truth_20x6_df,
+            group_by=["department"],
+            aggregations={"employee_count": ["count"], "salary": ["mean"]},
+        )
+
+    # 2. Dispatcher returns structured error
+    model_out, raw_out = execute_tool(
+        ground_truth_20x6_df,
+        "group_and_aggregate",
+        {"group_by": ["department"], "aggregations": {"employee_count": ["count"]}},
+    )
+    assert raw_out is None
+    assert model_out["status"] == "error"
+    assert "employee_count" in model_out["error"]
+    assert "Available columns" in model_out["error"]
+
+
+def test_agent_intended_group_and_aggregate_request(ground_truth_20x6_df):
+    """Bug 2 regression: agent executes intended group_and_aggregate request successfully."""
+    mock_client = MagicMock()
+
+    tc = make_tool_call(
+        "call_grp_1",
+        "group_and_aggregate",
+        {
+            "group_by": ["department"],
+            "aggregations": {
+                "employee": ["count"],
+                "salary": ["mean"],
+            },
+        },
+    )
+    resp1 = make_completion(tool_calls=[tc], finish_reason="tool_calls")
+    resp2 = make_completion(
+        content=(
+            "Grouped employees by department:\n"
+            "- Department Alpha has 10 employees with an average salary of 1550.0.\n"
+            "- Department Beta has 10 employees with an average salary of 2550.0."
+        ),
+        finish_reason="stop",
+    )
+    mock_client.chat.completions.create.side_effect = [resp1, resp2]
+
+    agent = AnalysisAgent(client=mock_client)
+    result = agent.run(
+        ground_truth_20x6_df,
+        "Group employees by department and calculate employee count and average salary.",
+    )
+
+    assert result.execution_success is True
+    assert result.error is None
+    assert result.rounds == 2
+    assert len(result.tool_calls) == 1
+    assert result.tool_calls[0].tool_name == "group_and_aggregate"
+    assert result.tool_calls[0].output.get("group_count") == 2
+    assert result.is_verified is True
+
+
+def test_agent_recovers_from_invalid_aggregation_arguments(ground_truth_20x6_df):
+    """Bug 2 regression: agent receives tool error on invalid column, retries with valid arguments, and succeeds."""
+    mock_client = MagicMock()
+
+    # Round 1: Model uses invalid aggregation column 'employee_count'
+    bad_tc = make_tool_call(
+        "call_bad_1",
+        "group_and_aggregate",
+        {
+            "group_by": ["department"],
+            "aggregations": {
+                "employee_count": ["count"],
+                "salary": ["mean"],
+            },
+        },
+    )
+    resp1 = make_completion(tool_calls=[bad_tc], finish_reason="tool_calls")
+
+    # Round 2: After receiving the error, model corrects the arguments
+    good_tc = make_tool_call(
+        "call_good_2",
+        "group_and_aggregate",
+        {
+            "group_by": ["department"],
+            "aggregations": {
+                "employee": ["count"],
+                "salary": ["mean"],
+            },
+        },
+    )
+    resp2 = make_completion(tool_calls=[good_tc], finish_reason="tool_calls")
+
+    # Round 3: Model returns final verified answer
+    resp3 = make_completion(
+        content=(
+            "Grouped results by department:\n"
+            "- Department Alpha has 10 employees with an average salary of 1550.0.\n"
+            "- Department Beta has 10 employees with an average salary of 2550.0."
+        ),
+        finish_reason="stop",
+    )
+    mock_client.chat.completions.create.side_effect = [resp1, resp2, resp3]
+
+    agent = AnalysisAgent(client=mock_client)
+    result = agent.run(
+        ground_truth_20x6_df,
+        "Group employees by department and calculate employee count and average salary.",
+    )
+
+    assert result.execution_success is True
+    assert result.error is None
+    assert result.rounds == 3
+    assert len(result.tool_calls) == 2
+
+    # Tool call 1 failed with error
+    assert result.tool_calls[0].output["status"] == "error"
+    assert "employee_count" in result.tool_calls[0].output["error"]
+
+    # Tool call 2 succeeded
+    assert result.tool_calls[1].output.get("group_count") == 2
+    results = {row["department"]: row for row in result.tool_calls[1].output["results"]}
+    assert results["Alpha"]["employee_count"] == 10
+    assert results["Alpha"]["salary_mean"] == 1550.0
+    assert results["Beta"]["employee_count"] == 10
+    assert results["Beta"]["salary_mean"] == 2550.0
+
+    # Grounding verified against the recovered successful tool call
+    assert result.is_verified is True
+
+    # Verify conversation history passed to mock_client in round 2 included the tool error message
+    calls = mock_client.chat.completions.create.call_args_list
+    round_2_messages = calls[1].kwargs["messages"]
+    tool_msg = next(m for m in round_2_messages if m["role"] == "tool")
+    tool_content = json.loads(tool_msg["content"])
+    assert tool_content["status"] == "error"
+    assert "employee_count" in tool_content["error"]
+
+
+def test_tool_schema_and_system_prompt_instruct_aggregation_keys(ground_truth_20x6_df):
+    """Bug 2 regression: verify schema and system prompt instruct model on aggregation keys and retry."""
+    # Check group_and_aggregate tool schema description
+    schema = next(s for s in TOOL_SCHEMAS if s["function"]["name"] == "group_and_aggregate")
+    fn = schema["function"]
+    agg_desc = fn["parameters"]["properties"]["aggregations"]["description"]
+    assert "existing" in agg_desc.lower()
+    assert "derived" in agg_desc.lower() or "source" in agg_desc.lower()
+
+    # Check system prompt instructions
+    agent = AnalysisAgent()
+    sys_prompt = agent._create_system_prompt(ground_truth_20x6_df)
+    assert "group_and_aggregate" in sys_prompt
+    assert "existing" in sys_prompt.lower()
+    assert "retry" in sys_prompt.lower() or "error" in sys_prompt.lower()

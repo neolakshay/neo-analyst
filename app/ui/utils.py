@@ -19,10 +19,10 @@ from app.agent import AnalysisAgent, AgentResult, ToolCallRecord
 load_dotenv()
 
 EXAMPLE_DATASETS: Dict[str, str] = {
-    "Employee Analytics (50 rows)": "examples/employee_analytics.csv",
-    "E-commerce Sales (100 rows)": "examples/ecommerce_sales.csv",
-    "Sample Data (10 rows)": "examples/sample_data.csv",
-    "Edge Cases (15 rows)": "examples/edge_cases.csv",
+    "Employee Analytics": "examples/employee_analytics.csv",
+    "E-commerce Sales": "examples/ecommerce_sales.csv",
+    "Sample Data": "examples/sample_data.csv",
+    "Edge Cases": "examples/edge_cases.csv",
 }
 
 
@@ -180,23 +180,59 @@ def format_tool_call_summary(tool_record: ToolCallRecord) -> Dict[str, Any]:
             is_error = True
             summary_text = f"Error: {output['error']}"
         elif name == "get_dataset_overview":
-            rows = output.get("row_count", "?")
-            cols = len(output.get("columns", []))
+            rows = output.get("rows")
+            if rows is None:
+                rows = output.get("row_count", "?")
+
+            cols_val = output.get("columns")
+            if isinstance(cols_val, int):
+                cols = cols_val
+            elif isinstance(cols_val, (list, tuple, set)):
+                cols = len(cols_val)
+            elif "column_names" in output and isinstance(output["column_names"], (list, tuple, set)):
+                cols = len(output["column_names"])
+            else:
+                cols = "?"
+
             summary_text = f"Retrieved overview: {rows} rows, {cols} columns"
         elif name == "get_summary_statistics":
-            cols_analyzed = len(output.get("numeric_columns", output.get("statistics", {})))
+            if isinstance(output.get("numeric"), dict) or isinstance(output.get("categorical"), dict):
+                n_num = len(output["numeric"]) if isinstance(output.get("numeric"), dict) else 0
+                n_cat = len(output["categorical"]) if isinstance(output.get("categorical"), dict) else 0
+                cols_analyzed = n_num + n_cat
+            elif isinstance(output.get("numeric_columns"), (list, dict, set, tuple)):
+                cols_analyzed = len(output["numeric_columns"])
+            elif isinstance(output.get("statistics"), (list, dict, set, tuple)):
+                cols_analyzed = len(output["statistics"])
+            else:
+                cols_analyzed = 0
             summary_text = f"Computed statistics for {cols_analyzed} column(s)"
         elif name == "filter_data":
             matched = output.get("matched_rows", "?")
             summary_text = f"Filtered dataset to {matched} row(s)"
         elif name == "analyze_correlations":
-            matrix = output.get("correlation_matrix", {})
-            summary_text = f"Correlation matrix with {len(matrix)} variable(s)"
+            mat = output.get("matrix")
+            if isinstance(mat, dict):
+                n_vars = len(mat)
+            elif isinstance(output.get("columns_used"), (list, tuple, set)):
+                n_vars = len(output["columns_used"])
+            elif isinstance(output.get("correlation_matrix"), dict):
+                n_vars = len(output["correlation_matrix"])
+            else:
+                n_vars = 0
+            summary_text = f"Correlation matrix with {n_vars} variable(s)"
         elif name == "generate_visualization":
             chart_type = output.get("chart_type", "chart")
             summary_text = f"Generated {chart_type} visualization"
         elif name == "group_and_aggregate":
-            groups = output.get("groups_count", len(output.get("results", [])))
+            if isinstance(output.get("group_count"), int):
+                groups = output["group_count"]
+            elif isinstance(output.get("groups_count"), int):
+                groups = output["groups_count"]
+            elif isinstance(output.get("results"), (list, tuple)):
+                groups = len(output["results"])
+            else:
+                groups = 0
             summary_text = f"Aggregated into {groups} group(s)"
         else:
             summary_text = output.get("message", "Tool execution completed.")

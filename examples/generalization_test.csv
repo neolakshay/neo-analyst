@@ -1,0 +1,16 @@
+employee_id,team,years_experience,monthly_salary,satisfaction_score,weekly_hours
+EMP01,Core,1,2400,8.0,35
+EMP02,Core,2,2500,7.8,36
+EMP03,Core,3,2800,7.5,38
+EMP04,Core,4,3100,7.0,39
+EMP05,Core,5,,6.5,39
+EMP06,Growth,2,2600,7.8,36
+EMP07,Growth,4,3000,7.2,38
+EMP08,,6,3800,6.8,42
+EMP09,Growth,8,3800,6.4,44
+EMP10,Growth,9,4200,,45
+EMP11,Platform,3,2800,7.6,37
+EMP12,Platform,5,3300,7.0,39
+EMP13,Platform,6,3600,6.6,41
+EMP14,Platform,8,4000,6.2,44
+EMP15,Platform,9,4300,5.6,47

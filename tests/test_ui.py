@@ -23,6 +23,7 @@ from io import StringIO
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 import os
+import re
 import subprocess
 import sys
 import time
@@ -71,7 +72,7 @@ def sample_df():
 
 def test_load_csv_valid_path():
     """Valid CSV loading from filesystem path."""
-    emp_path = resolve_example_path(EXAMPLE_DATASETS["Employee Analytics (50 rows)"])
+    emp_path = resolve_example_path(EXAMPLE_DATASETS["Employee Analytics"])
     df, err = load_csv(emp_path)
     assert err is None
     assert df is not None
@@ -202,6 +203,228 @@ def test_format_tool_call_summary_error():
     assert formatted["status"] == "Error"
     assert formatted["is_error"] is True
     assert "Column 'unknown' not found" in formatted["summary"]
+
+
+def test_format_tool_call_summary_overview_int_columns():
+    """Bug 1 regression: overview output where 'columns' is an integer."""
+    record = ToolCallRecord(
+        tool_name="get_dataset_overview",
+        arguments={},
+        output={
+            "rows": 20,
+            "columns": 6,
+            "column_names": ["employee", "department", "experience_years", "salary", "performance_score", "hours_per_week"],
+        },
+    )
+    formatted = format_tool_call_summary(record)
+    assert formatted["status"] == "Success"
+    assert formatted["is_error"] is False
+    assert formatted["summary"] == "Retrieved overview: 20 rows, 6 columns"
+
+
+def test_format_tool_call_summary_overview_column_names_list():
+    """Bug 1 regression: overview output containing 'column_names' as a list without integer 'columns'."""
+    record = ToolCallRecord(
+        tool_name="get_dataset_overview",
+        arguments={},
+        output={
+            "rows": 15,
+            "column_names": ["col1", "col2", "col3", "col4"],
+        },
+    )
+    formatted = format_tool_call_summary(record)
+    assert formatted["status"] == "Success"
+    assert formatted["is_error"] is False
+    assert formatted["summary"] == "Retrieved overview: 15 rows, 4 columns"
+
+
+def test_format_tool_call_summary_overview_defensive_fields():
+    """Bug 1 regression: defensive handling for missing or malformed fields."""
+    rec_empty = ToolCallRecord(tool_name="get_dataset_overview", arguments={}, output={})
+    fmt_empty = format_tool_call_summary(rec_empty)
+    assert fmt_empty["summary"] == "Retrieved overview: ? rows, ? columns"
+
+    rec_none = ToolCallRecord(
+        tool_name="get_dataset_overview",
+        arguments={},
+        output={"rows": None, "columns": None},
+    )
+    fmt_none = format_tool_call_summary(rec_none)
+    assert fmt_none["summary"] == "Retrieved overview: ? rows, ? columns"
+
+
+def test_app_renders_overview_tool_call_without_type_error():
+    """Bug 1 regression: AppTest exercises rendering of overview tool call details without crashing."""
+    overview_result = AgentResult(
+        answer="The dataset has 20 rows and 6 columns.",
+        tool_calls=[
+            ToolCallRecord(
+                tool_name="get_dataset_overview",
+                arguments={},
+                output={
+                    "rows": 20,
+                    "columns": 6,
+                    "column_names": ["employee", "department", "experience_years", "salary", "performance_score", "hours_per_week"],
+                },
+            )
+        ],
+        rounds=1,
+    )
+
+    with patch("app.ui.utils.run_analysis_query", return_value=overview_result):
+        with patch("app.ui.utils.is_api_key_configured", return_value=True):
+            at = AppTest.from_file(APP_PATH)
+            at.run()
+
+            at.text_area[0].input("Show overview").run()
+            analyze_btn = next((b for b in at.button if "Analyze" in b.label), None)
+            assert analyze_btn is not None
+            analyze_btn.click().run()
+
+            assert not at.exception
+            markdowns = [m.value for m in at.markdown]
+            assert any("Retrieved overview: 20 rows, 6 columns" in m for m in markdowns)
+
+
+def test_format_tool_call_summary_all_tools_actual_schemas():
+    """Verify format_tool_call_summary accurately summarizes real analytical output schemas for all 6 tools."""
+    # 1. get_dataset_overview
+    ov_rec = ToolCallRecord(
+        tool_name="get_dataset_overview",
+        arguments={},
+        output={"rows": 20, "columns": 6, "column_names": ["a", "b", "c", "d", "e", "f"]},
+    )
+    assert format_tool_call_summary(ov_rec)["summary"] == "Retrieved overview: 20 rows, 6 columns"
+
+    # 2. get_summary_statistics (real schema has 'numeric' and 'categorical')
+    stat_rec = ToolCallRecord(
+        tool_name="get_summary_statistics",
+        arguments={},
+        output={
+            "numeric": {"salary": {}, "experience_years": {}},
+            "categorical": {"department": {}},
+        },
+    )
+    assert format_tool_call_summary(stat_rec)["summary"] == "Computed statistics for 3 column(s)"
+
+    # 3. filter_data
+    filt_rec = ToolCallRecord(
+        tool_name="filter_data",
+        arguments={},
+        output={"matched_rows": 3, "total_rows": 20},
+    )
+    assert format_tool_call_summary(filt_rec)["summary"] == "Filtered dataset to 3 row(s)"
+
+    # 4. analyze_correlations (real schema has 'matrix' and 'columns_used')
+    corr_rec = ToolCallRecord(
+        tool_name="analyze_correlations",
+        arguments={},
+        output={
+            "columns_used": ["salary", "experience_years"],
+            "matrix": {"salary": {}, "experience_years": {}},
+        },
+    )
+    assert format_tool_call_summary(corr_rec)["summary"] == "Correlation matrix with 2 variable(s)"
+
+    # 5. generate_visualization
+    viz_rec = ToolCallRecord(
+        tool_name="generate_visualization",
+        arguments={},
+        output={"chart_type": "scatter", "title": "Scatter plot"},
+    )
+    assert format_tool_call_summary(viz_rec)["summary"] == "Generated scatter visualization"
+
+    # 6. group_and_aggregate (real schema has 'group_count' and 'results')
+    grp_rec = ToolCallRecord(
+        tool_name="group_and_aggregate",
+        arguments={},
+        output={"group_count": 2, "results": [{"department": "Alpha"}, {"department": "Beta"}]},
+    )
+    assert format_tool_call_summary(grp_rec)["summary"] == "Aggregated into 2 group(s)"
+
+
+def test_format_tool_call_summary_malformed_and_unexpected_values():
+    """Verify format_tool_call_summary safely handles unexpected types and missing fields."""
+    # Overview with non-integer, non-list columns and non-int rows
+    ov_bad = ToolCallRecord(
+        tool_name="get_dataset_overview",
+        arguments={},
+        output={"rows": None, "columns": "unexpected", "column_names": 123},
+    )
+    assert format_tool_call_summary(ov_bad)["summary"] == "Retrieved overview: ? rows, ? columns"
+
+    # Statistics with None values
+    stat_bad = ToolCallRecord(
+        tool_name="get_summary_statistics",
+        arguments={},
+        output={"numeric": None, "categorical": None},
+    )
+    assert format_tool_call_summary(stat_bad)["summary"] == "Computed statistics for 0 column(s)"
+
+    # Correlation with None values
+    corr_bad = ToolCallRecord(
+        tool_name="analyze_correlations",
+        arguments={},
+        output={"matrix": None, "columns_used": None},
+    )
+    assert format_tool_call_summary(corr_bad)["summary"] == "Correlation matrix with 0 variable(s)"
+
+    # Grouping with None values
+    grp_bad = ToolCallRecord(
+        tool_name="group_and_aggregate",
+        arguments={},
+        output={"group_count": None, "results": None},
+    )
+    assert format_tool_call_summary(grp_bad)["summary"] == "Aggregated into 0 group(s)"
+
+    # Empty dictionary
+    assert format_tool_call_summary(ToolCallRecord(tool_name="filter_data", arguments={}, output={}))["summary"] == "Filtered dataset to ? row(s)"
+
+    # Non-dict output
+    rec_num = ToolCallRecord(tool_name="custom_tool", arguments={}, output=42)
+    assert format_tool_call_summary(rec_num)["status"] == "Success"
+
+
+def test_app_renders_various_tool_calls_and_errors_without_crashing():
+    """AppTest verifies rendering does not crash on errors, empty results, or malformed optional metadata."""
+    res = AgentResult(
+        answer="Analysis complete.",
+        tool_calls=[
+            ToolCallRecord(
+                tool_name="group_and_aggregate",
+                arguments={},
+                output={"status": "error", "error": "Aggregation column 'ghost' does not exist."},
+            ),
+            ToolCallRecord(
+                tool_name="get_summary_statistics",
+                arguments={},
+                output={"numeric": {"salary": {}}, "categorical": {}},
+            ),
+            ToolCallRecord(
+                tool_name="get_dataset_overview",
+                arguments={},
+                output={"rows": None, "columns": None},
+            ),
+        ],
+        rounds=2,
+    )
+
+    with patch("app.ui.utils.run_analysis_query", return_value=res):
+        with patch("app.ui.utils.is_api_key_configured", return_value=True):
+            at = AppTest.from_file(APP_PATH)
+            at.run()
+
+            at.text_area[0].input("Run analysis").run()
+            analyze_btn = next((b for b in at.button if "Analyze" in b.label), None)
+            assert analyze_btn is not None
+            analyze_btn.click().run()
+
+            assert not at.exception
+            errors = [e.value for e in at.error]
+            assert any("Aggregation column 'ghost' does not exist" in err for err in errors)
+            markdowns = [m.value for m in at.markdown]
+            assert any("Computed statistics for 1 column(s)" in m for m in markdowns)
+            assert any("Retrieved overview: ? rows, ? columns" in m for m in markdowns)
 
 
 # ── 5. API Key Check Tests ───────────────────────────────────────────────────
@@ -495,7 +718,7 @@ def test_app_dataset_switching_clears_stale_results():
             assert any("Employee analytics specific answer" in m for m in markdowns)
 
             # Switch dataset to E-commerce Sales
-            at.selectbox(key="example_choice").select("E-commerce Sales (100 rows)").run()
+            at.selectbox(key="example_choice").select("E-commerce Sales").run()
 
             # Stale result must NO LONGER be present
             markdowns_after = [m.value for m in at.markdown]
@@ -583,4 +806,163 @@ def test_streamlit_cli_entrypoint_launch_no_recursion():
     finally:
         if proc.poll() is None:
             proc.kill()
+
+
+# ── 9. Dataset Selector & Dynamic Row Count Tests ────────────────────────────
+
+def test_example_datasets_display_names_have_no_hardcoded_row_counts():
+    """Verify none of the example dataset display names contain hardcoded row counts."""
+    expected_labels = [
+        "Employee Analytics",
+        "E-commerce Sales",
+        "Sample Data",
+        "Edge Cases",
+    ]
+    # Check exact keys match stable human-readable names
+    assert list(EXAMPLE_DATASETS.keys()) == expected_labels
+
+    for label in EXAMPLE_DATASETS.keys():
+        # Ensure label does not contain "(... rows)" or any row count indicator
+        assert not re.search(r"\d+\s*rows?", label, re.IGNORECASE), (
+            f"Dataset label '{label}' contains a hardcoded row count."
+        )
+
+
+def test_all_example_datasets_selectable_in_ui():
+    """Verify all four datasets remain selectable in the sidebar selectbox."""
+    for label, rel_path in EXAMPLE_DATASETS.items():
+        abs_path = resolve_example_path(rel_path)
+        assert abs_path.is_file(), f"Dataset file does not exist: {abs_path}"
+
+        at = AppTest.from_file(APP_PATH)
+        at.run()
+        assert not at.exception
+
+        # Select the dataset
+        at.selectbox(key="example_choice").select(label).run()
+        assert not at.exception
+
+        # Verify session state reflects the selected dataset
+        assert at.session_state["dataset_name"] == label
+        assert at.session_state["df"] is not None
+
+        # Verify overview header and metric reflect the loaded dataset
+        df = at.session_state["df"]
+        total_rows_metric = next((m for m in at.metric if m.label == "Total Rows"), None)
+        assert total_rows_metric is not None
+        assert total_rows_metric.value == f"{len(df):,}"
+
+
+def test_dataset_overview_metrics_reflect_actual_dataframe():
+    """Verify dataset overview metrics dynamically reflect the actual loaded DataFrame."""
+    custom_df = pd.DataFrame({
+        "col_a": list(range(42)),
+        "col_b": ["val"] * 42,
+    })
+    summary = get_dataset_summary(custom_df)
+    assert summary["rows"] == 42
+    assert summary["columns"] == 2
+    assert summary["total_nulls"] == 0
+
+    with patch("app.ui.utils.load_csv", return_value=(custom_df, None)):
+        at = AppTest.from_file(APP_PATH)
+        at.run()
+        assert not at.exception
+
+        rows_metric = next((m for m in at.metric if m.label == "Total Rows"), None)
+        cols_metric = next((m for m in at.metric if m.label == "Total Columns"), None)
+        assert rows_metric is not None
+        assert rows_metric.value == "42"
+        assert cols_metric is not None
+        assert cols_metric.value == "2"
+
+
+def test_ui_updates_when_dataset_row_count_changes():
+    """Verify the UI metrics update accurately when a dataset's row count changes."""
+    # Simulate a dataset where row count changed (e.g. truncated to 20 rows)
+    truncated_df = pd.DataFrame({
+        "id": list(range(20)),
+        "val": [100.0] * 20,
+    })
+
+    with patch("app.ui.utils.load_csv", return_value=(truncated_df, None)):
+        at = AppTest.from_file(APP_PATH)
+        at.run()
+        assert not at.exception
+
+        # The label in selectbox should remain the stable name without row count
+        selected_option = at.selectbox(key="example_choice").value
+        assert selected_option == "Employee Analytics"
+        assert "20" not in selected_option
+        assert "50" not in selected_option
+
+        # But the Total Rows metric must display the actual count (20)
+        rows_metric = next((m for m in at.metric if m.label == "Total Rows"), None)
+        assert rows_metric is not None
+        assert rows_metric.value == "20"
+
+
+def test_app_combined_ui_to_agent_grouping_workflow():
+    """End-to-End integration test: exercises dataset selection, query submission, agent execution,
+    overview and grouping tool calls, and UI rendering without crashing.
+    """
+    combined_result = AgentResult(
+        answer="Grouped employees: Alpha has 10 employees (mean salary 1550.0), Beta has 10 employees (mean salary 2550.0).",
+        tool_calls=[
+            ToolCallRecord(
+                tool_name="get_dataset_overview",
+                arguments={},
+                output={
+                    "rows": 20,
+                    "columns": 6,
+                    "column_names": ["employee", "department", "experience_years", "salary", "performance_score", "hours_per_week"],
+                },
+            ),
+            ToolCallRecord(
+                tool_name="group_and_aggregate",
+                arguments={
+                    "group_by": ["department"],
+                    "aggregations": {"employee": ["count"], "salary": ["mean"]},
+                },
+                output={
+                    "group_by": ["department"],
+                    "aggregations": {"employee": ["count"], "salary": ["mean"]},
+                    "group_count": 2,
+                    "results": [
+                        {"department": "Alpha", "employee_count": 10, "salary_mean": 1550.0},
+                        {"department": "Beta", "employee_count": 10, "salary_mean": 2550.0},
+                    ],
+                },
+            ),
+        ],
+        rounds=2,
+        grounding=GroundingResult(
+            status=GroundingStatus.VERIFIED,
+            claims_checked=["Group 'Alpha' salary_mean (1550.0) matches answer"],
+            reasons=["Group 'Alpha' salary_mean (1550.0) matches answer"],
+        ),
+    )
+
+    with patch("app.ui.utils.run_analysis_query", return_value=combined_result):
+        with patch("app.ui.utils.is_api_key_configured", return_value=True):
+            at = AppTest.from_file(APP_PATH)
+            at.run()
+            assert not at.exception
+
+            # Submit question
+            at.text_area[0].input("Group employees by department and calculate employee count and average salary.").run()
+            analyze_btn = next((b for b in at.button if "Analyze" in b.label), None)
+            assert analyze_btn is not None
+            analyze_btn.click().run()
+
+            assert not at.exception
+            # Verify Answer rendered
+            markdowns = [m.value for m in at.markdown]
+            assert any("Alpha has 10 employees" in m for m in markdowns)
+            # Verify Verified Grounding Status rendered
+            assert any("VERIFIED" in s.value for s in at.success)
+            # Verify both tool calls rendered properly in tool details
+            assert any("Retrieved overview: 20 rows, 6 columns" in m for m in markdowns)
+            assert any("Aggregated into 2 group(s)" in m for m in markdowns)
+
 

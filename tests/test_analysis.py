@@ -10,6 +10,7 @@ Run with:  pytest tests/ -v
 
 import json
 import math
+from pathlib import Path
 import pandas as pd
 import pytest
 
@@ -915,5 +916,59 @@ class TestGroupAndAggregate:
         assert result["group_count"] > 0
         assert "quantity_sum" in result["results"][0]
         assert "unit_price_mean" in result["results"][0]
+
+
+# ── 7. Ground Truth 20x6 Analytical Engine End-to-End Verification ─────────────
+
+def test_ground_truth_20x6_full_analytical_suite():
+    """Verify all six analytical tools against ground_truth_20x6.csv as specified in Step 3."""
+    csv_path = Path(__file__).resolve().parent.parent / "ground_truth_20x6.csv"
+    assert csv_path.is_file(), f"ground_truth_20x6.csv must exist at {csv_path}"
+    df = pd.read_csv(csv_path)
+
+    # 1. get_dataset_overview: 20 rows, 6 columns, zero missing values
+    ov = get_dataset_overview(df)
+    assert ov["rows"] == 20
+    assert ov["columns"] == 6
+    assert sum(ov["missing_counts"].values()) == 0
+
+    # 2. get_summary_statistics:
+    # Mean experience_years = 10.5, Mean salary = 2050, Min salary = 1100, Max salary = 3000
+    stats = get_summary_statistics(df)
+    assert stats["numeric"]["experience_years"]["mean"] == 10.5
+    assert stats["numeric"]["salary"]["mean"] == 2050.0
+    assert stats["numeric"]["salary"]["min"] == 1100.0
+    assert stats["numeric"]["salary"]["max"] == 3000.0
+
+    # 3. analyze_correlations:
+    # Pearson correlation between experience_years and salary = 1.0
+    corr = analyze_correlations(df, columns=["experience_years", "salary"])
+    r_val = corr["matrix"]["experience_years"]["salary"]
+    assert round(r_val, 4) == 1.0
+
+    # 4. filter_data:
+    # Filtering experience_years >= 18 returns E18, E19, E20
+    filt = filter_data(df, [{"column": "experience_years", "operator": "gte", "value": 18}])
+    assert list(filt["employee"]) == ["E18", "E19", "E20"]
+
+    # 5. group_and_aggregate:
+    # Grouping by department gives 10 employees per department.
+    # Alpha average salary = 1550, Beta average salary = 2550
+    grp = group_and_aggregate(
+        df,
+        group_by=["department"],
+        aggregations={"employee": ["count"], "salary": ["mean"]},
+    )
+    by_dept = {r["department"]: r for r in grp["results"]}
+    assert by_dept["Alpha"]["employee_count"] == 10
+    assert by_dept["Alpha"]["salary_mean"] == 1550.0
+    assert by_dept["Beta"]["employee_count"] == 10
+    assert by_dept["Beta"]["salary_mean"] == 2550.0
+
+    # 6. generate_visualization:
+    # Scatter visualization represents all 20 observations
+    fig = generate_visualization(df, chart_type="scatter", x_column="experience_years", y_column="salary")
+    total_pts = sum(len(trace.x) for trace in fig.data)
+    assert total_pts == 20
 
 
