@@ -44,7 +44,7 @@ neo-applied-ml/
 
 ```bash
 # 1. Clone the repository
-git clone <your-repo-url>
+git clone https://github.com/neolakshay/neo-applied-ml
 cd neo-applied-ml
 
 # 2. Create a virtual environment (keeps dependencies isolated)
