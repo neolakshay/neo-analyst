@@ -58,10 +58,11 @@ def get_summary_statistics(df: pd.DataFrame, top_n: int = 5) -> dict:
                 "non_null_count": 0,
             }
         else:
+            std_val = series.std()
             numeric_stats[col] = {
                 "mean":   round(float(series.mean()), 4),
                 "median": round(float(series.median()), 4),
-                "std":    round(float(series.std()), 4),
+                "std":    round(float(std_val), 4) if pd.notna(std_val) else None,
                 "min":    round(float(series.min()), 4),
                 "max":    round(float(series.max()), 4),
                 "q25":    round(float(series.quantile(0.25)), 4),

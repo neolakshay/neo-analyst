@@ -52,3 +52,25 @@ def df_with_missing() -> pd.DataFrame:
 def single_col_df() -> pd.DataFrame:
     """DataFrame with only one numeric column (edge case for correlations)."""
     return pd.DataFrame({"value": [10, 20, 30]})
+
+
+@pytest.fixture
+def ecommerce_df() -> pd.DataFrame:
+    """The e-commerce sales dataset loaded as a DataFrame."""
+    path = pathlib.Path(__file__).resolve().parent.parent / "examples" / "ecommerce_sales.csv"
+    return pd.read_csv(path)
+
+
+@pytest.fixture
+def employee_df() -> pd.DataFrame:
+    """The employee analytics dataset loaded as a DataFrame."""
+    path = pathlib.Path(__file__).resolve().parent.parent / "examples" / "employee_analytics.csv"
+    return pd.read_csv(path)
+
+
+@pytest.fixture
+def edge_cases_df() -> pd.DataFrame:
+    """The edge-cases dataset loaded as a DataFrame."""
+    path = pathlib.Path(__file__).resolve().parent.parent / "examples" / "edge_cases.csv"
+    return pd.read_csv(path)
+

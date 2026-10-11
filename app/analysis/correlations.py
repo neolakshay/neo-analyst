@@ -89,10 +89,10 @@ def analyze_correlations(
     # ── Compute the correlation matrix ────────────────────────────────────────
     corr_matrix = df[numeric_cols].corr(method="pearson", min_periods=min_periods)
 
-    # Convert to nested plain-Python dict (round to 4 dp for readability).
+    # Convert to nested plain-Python dict (round to 4 dp for readability, None for NaN).
     matrix_dict: dict = {
         col: {
-            other: round(float(val), 4)
+            other: round(float(val), 4) if pd.notna(val) else None
             for other, val in row.items()
         }
         for col, row in corr_matrix.to_dict().items()
@@ -106,14 +106,23 @@ def analyze_correlations(
             if pd.notna(r):
                 pairs.append((col_a, col_b, round(float(r), 4)))
 
-    # Sort descending for positive pairs, ascending for negative.
-    top_positive = sorted(pairs, key=lambda x: x[2], reverse=True)[:top_n]
-    top_negative = sorted(pairs, key=lambda x: x[2])[:top_n]
+    # Top positive pairs (r > 0, sorted descending) and top negative pairs (r < 0, sorted ascending).
+    pos_pairs = [p for p in pairs if p[2] > 0]
+    neg_pairs = [p for p in pairs if p[2] < 0]
+    top_positive = sorted(pos_pairs, key=lambda x: x[2], reverse=True)[:top_n]
+    top_negative = sorted(neg_pairs, key=lambda x: x[2])[:top_n]
+
+    warning = None
+    if len(pairs) == 0:
+        warning = (
+            "No valid pairwise correlations could be computed "
+            "(e.g. constant columns or insufficient observations)."
+        )
 
     return {
         "columns_used": numeric_cols,
         "matrix": matrix_dict,
         "top_positive": top_positive,
         "top_negative": top_negative,
-        "warning": None,
+        "warning": warning,
     }

@@ -83,8 +83,8 @@ def _apply_condition(df: pd.DataFrame, condition: dict) -> "pd.Series[bool]":
     if op == "lte":
         return series <= val
     if op == "contains":
-        # Works on string columns; cast to str first to be safe.
-        return series.astype(str).str.contains(str(val), case=False, na=False)
+        # Works on string columns; cast to str first to be safe. Use regex=False for literal substring matching.
+        return series.astype(str).str.contains(str(val), case=False, na=False, regex=False)
     if op == "isnull":
         return series.isnull()
     if op == "notnull":

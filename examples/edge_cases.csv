@@ -1,0 +1,21 @@
+id,score,bonus,department,notes
+1,10,1000,Engineering,Excellent
+2,20,,Sales,
+3,30,3000,Engineering,Good
+4,,,HR,Missing numeric values
+5,20,2000,Sales,Repeated score
+6,0,0,HR,Zero values
+7,100,10000,Engineering,Large value
+8,10,1000,Sales,Repeated values
+9,,500,HR,
+10,50,5000,Engineering,Middle value
+11,-15,-1500,Sales,Negative numeric values
+12,25.5,2550.0,Finance,Decimal float values
+13,40,4000,,Missing categorical field
+14,NaN,NULL,HR,String literal NULL and NaN
+15,35,3500,Sales,"Note with commas, requires quotes"
+16,15,1500,sales,Inconsistent lowercase category
+17,999999,99999999,Engineering,Extreme high outlier
+18,90,0,Sales,Logical anomaly high score zero bonus
+19, 25 , 2500 ,HR,Whitespace padded values
+20,,,,Entire record missing except id

@@ -62,6 +62,11 @@ def generate_visualization(
             f"Expected a pandas DataFrame, got {type(df).__name__}."
         )
 
+    if not isinstance(chart_type, str):
+        raise TypeError(
+            f"chart_type must be a string, got {type(chart_type).__name__}."
+        )
+
     chart_type = chart_type.strip().lower()
     if chart_type not in VALID_CHART_TYPES:
         raise ValueError(
@@ -76,6 +81,9 @@ def generate_visualization(
                 f"{label} column '{col_name}' does not exist. "
                 f"Available columns: {list(df.columns)}"
             )
+
+    if color_column is not None:
+        _check_col(color_column, "color_column")
 
     # ── Route to the appropriate chart ────────────────────────────────────────
     if chart_type == "bar":
@@ -109,8 +117,6 @@ def generate_visualization(
             raise ValueError("'scatter' charts require both x_column and y_column.")
         _check_col(x_column, "x_column")
         _check_col(y_column, "y_column")
-        if color_column:
-            _check_col(color_column, "color_column")
         fig = px.scatter(
             df,
             x=x_column,

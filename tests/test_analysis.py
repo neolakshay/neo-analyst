@@ -409,3 +409,201 @@ class TestGenerateVisualization:
             clean_df, "box", x_column="category", y_column="x"
         )
         assert isinstance(fig, go.Figure)
+
+    def test_raises_on_non_string_chart_type(self, clean_df):
+        with pytest.raises(TypeError, match="chart_type must be a string"):
+            generate_visualization(clean_df, 123, x_column="x", y_column="y")
+
+    def test_raises_on_nonexistent_color_column_bar(self, clean_df):
+        with pytest.raises(ValueError, match="color_column column 'ghost' does not exist"):
+            generate_visualization(
+                clean_df, "bar", x_column="category", y_column="x", color_column="ghost"
+            )
+
+    def test_raises_on_nonexistent_color_column_line(self, clean_df):
+        with pytest.raises(ValueError, match="color_column column 'ghost' does not exist"):
+            generate_visualization(
+                clean_df, "line", x_column="x", y_column="y", color_column="ghost"
+            )
+
+    def test_raises_on_nonexistent_color_column_histogram(self, clean_df):
+        with pytest.raises(ValueError, match="color_column column 'ghost' does not exist"):
+            generate_visualization(
+                clean_df, "histogram", x_column="x", color_column="ghost"
+            )
+
+    def test_raises_on_nonexistent_color_column_box(self, clean_df):
+        with pytest.raises(ValueError, match="color_column column 'ghost' does not exist"):
+            generate_visualization(
+                clean_df, "box", y_column="x", color_column="ghost"
+            )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 6. Regression tests for bug fixes & edge cases
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestRegressionAndEdgeCases:
+
+    def test_single_non_null_numeric_std_is_none(self):
+        """std of a single observation is undefined (ddof=1); should be None, not float('nan')."""
+        df = pd.DataFrame({"single_val": [42.0, None, None]})
+        stats = get_summary_statistics(df)
+        col_stats = stats["numeric"]["single_val"]
+        assert col_stats["mean"] == 42.0
+        assert col_stats["std"] is None
+        assert col_stats["non_null_count"] == 1
+
+    def test_contains_with_regex_special_characters(self):
+        """contains operator must perform literal substring match and not fail on regex chars."""
+        df = pd.DataFrame({
+            "text": ["4K (UHD) Monitor", "Price + Tax", "Question?", "Item [A*]"]
+        })
+        res1 = filter_data(df, [{"column": "text", "operator": "contains", "value": "4K ("}])
+        assert len(res1) == 1
+        assert res1.iloc[0]["text"] == "4K (UHD) Monitor"
+
+        res2 = filter_data(df, [{"column": "text", "operator": "contains", "value": "[A*]"}])
+        assert len(res2) == 1
+        assert res2.iloc[0]["text"] == "Item [A*]"
+
+    def test_constant_column_correlation_returns_none_and_warning(self):
+        """Constant columns have zero variance; Pearson correlation is undefined (None, not NaN)."""
+        df = pd.DataFrame({"const_a": [5, 5, 5], "const_b": [10, 10, 10]})
+        result = analyze_correlations(df)
+        assert result["matrix"]["const_a"]["const_b"] is None
+        assert result["matrix"]["const_a"]["const_a"] is None
+        assert result["top_positive"] == []
+        assert result["top_negative"] == []
+        assert result["warning"] is not None
+
+    def test_top_positive_only_includes_positive_correlations(self, clean_df):
+        """Ensure top_positive contains only pairs with r > 0."""
+        result = analyze_correlations(clean_df)
+        for _, _, r in result["top_positive"]:
+            assert r > 0
+
+    def test_top_negative_only_includes_negative_correlations(self, clean_df):
+        """Ensure top_negative contains only pairs with r < 0."""
+        result = analyze_correlations(clean_df)
+        for _, _, r in result["top_negative"]:
+            assert r < 0
+
+    def test_datasets_with_no_negative_correlations_returns_empty_top_negative(self, employee_df):
+        """employee_analytics has only positive pairwise correlations; top_negative must be empty."""
+        result = analyze_correlations(employee_df)
+        assert len(result["top_negative"]) == 0
+        assert len(result["top_positive"]) > 0
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 7. Multi-dataset validation suite
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestMultiDatasetValidation:
+
+    def test_ecommerce_dataset_full_pipeline(self, ecommerce_df):
+        # 1. Overview
+        ov = get_dataset_overview(ecommerce_df)
+        assert ov["rows"] == 150
+        assert ov["columns"] == 7
+        assert ov["missing_counts"]["quantity"] == 7
+        assert ov["missing_counts"]["unit_price"] == 5
+        assert ov["missing_counts"]["discount_pct"] == 33
+
+        # 2. Statistics
+        stats = get_summary_statistics(ecommerce_df, top_n=3)
+        assert "quantity" in stats["numeric"]
+        assert stats["numeric"]["quantity"]["non_null_count"] == 143
+        assert stats["numeric"]["unit_price"]["min"] == 45.0
+        assert stats["numeric"]["unit_price"]["max"] == 85000.0
+
+        # 3. Filter
+        filtered = filter_data(ecommerce_df, [
+            {"column": "category", "operator": "eq", "value": "Electronics"},
+            {"column": "unit_price", "operator": "gte", "value": 5000},
+            {"column": "discount_pct", "operator": "notnull"},
+        ])
+        assert len(filtered) > 0
+        assert all(filtered["category"] == "Electronics")
+        assert all(filtered["unit_price"] >= 5000)
+        assert all(filtered["discount_pct"].notnull())
+
+        # 4. Correlations
+        corr = analyze_correlations(ecommerce_df)
+        assert "unit_price" in corr["matrix"]
+        assert len(corr["top_positive"]) > 0
+        assert len(corr["top_negative"]) > 0
+
+        # 5. Visualizations
+        fig_scatter = generate_visualization(
+            ecommerce_df, "scatter", x_column="quantity", y_column="unit_price", color_column="category"
+        )
+        assert fig_scatter is not None
+        fig_hist = generate_visualization(ecommerce_df, "histogram", x_column="unit_price")
+        assert fig_hist is not None
+
+    def test_employee_dataset_full_pipeline(self, employee_df):
+        # 1. Overview
+        ov = get_dataset_overview(employee_df)
+        assert ov["rows"] == 50
+        assert ov["columns"] == 6
+        assert ov["missing_counts"]["department"] == 2
+        assert ov["missing_counts"]["salary"] == 4
+
+        # 2. Statistics
+        stats = get_summary_statistics(employee_df)
+        assert stats["numeric"]["salary"]["mean"] == pytest.approx(1486086.9565, abs=1e-2)
+        assert stats["numeric"]["experience_years"]["median"] == 7.0
+
+        # 3. Filter
+        filtered = filter_data(employee_df, [
+            {"column": "department", "operator": "eq", "value": "Engineering"},
+            {"column": "remote", "operator": "eq", "value": "Yes"},
+        ])
+        assert len(filtered) == 5
+        assert all(filtered["department"] == "Engineering")
+        assert all(filtered["remote"] == "Yes")
+
+        # 4. Correlations
+        corr = analyze_correlations(employee_df)
+        assert corr["matrix"]["experience_years"]["salary"] == pytest.approx(0.8525, abs=1e-3)
+        assert len(corr["top_positive"]) == 3
+        assert len(corr["top_negative"]) == 0
+
+        # 5. Visualizations
+        fig_box = generate_visualization(
+            employee_df, "box", x_column="department", y_column="salary"
+        )
+        assert fig_box is not None
+
+    def test_edge_cases_dataset_full_pipeline(self, edge_cases_df):
+        # 1. Overview
+        ov = get_dataset_overview(edge_cases_df)
+        assert ov["rows"] == 20
+        assert ov["columns"] == 5
+        assert ov["missing_counts"]["score"] == 4
+        assert ov["missing_counts"]["bonus"] == 4
+
+        # 2. Statistics
+        stats = get_summary_statistics(edge_cases_df)
+        assert stats["numeric"]["score"]["max"] == 999999.0
+        assert stats["numeric"]["score"]["min"] == -15.0
+        assert stats["numeric"]["score"]["non_null_count"] == 16
+
+        # 3. Filter
+        f_null = filter_data(edge_cases_df, [{"column": "score", "operator": "isnull"}])
+        assert len(f_null) == 4
+        f_outlier = filter_data(edge_cases_df, [{"column": "notes", "operator": "contains", "value": "outlier"}])
+        assert len(f_outlier) == 1
+
+        # 4. Correlations
+        corr = analyze_correlations(edge_cases_df)
+        assert corr["matrix"]["score"]["bonus"] == pytest.approx(1.0, abs=1e-4)
+
+        # 5. Visualizations
+        fig_bar = generate_visualization(
+            edge_cases_df, "bar", x_column="id", y_column="score"
+        )
+        assert fig_bar is not None
+

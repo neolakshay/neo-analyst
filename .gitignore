@@ -37,6 +37,7 @@ build/
 .vscode/
 *.DS_Store
 Thumbs.db
+*.html
 
 # ── Private / local data ──────────────────────────────────────────────────────
 data/private/
