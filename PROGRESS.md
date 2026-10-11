@@ -100,7 +100,9 @@
 
 ---
 
-### Remaining Known Limitations
+---
+
+### Remaining Known Limitations (Analytical Engine)
 
 - `filter_data` supports AND-logic only (OR / nested boolean expressions not supported).
 - `analyze_correlations` supports Pearson linear correlation only (Spearman rank and Kendall tau not supported).
@@ -110,11 +112,81 @@
 
 ---
 
-## Phase 2 — LLM Agent 🔲 READY TO BEGIN
+## Phase 2, Step 1 — Core LLM Data Analysis Agent ✅ COMPLETE & TESTED
 
-**Phase 1 Status:** 100% Implemented (all 6 tools), Validated, and Ready for Phase 2 integration.
+**Implementation Date:** 2026-10-11  
 
-The analytical engine functions now have strict input validation, clear error contracts, JSON-compliant return values, and rock-solid edge-case handling across multiple real-world schemas.
+### Architecture & Design
+
+The agent is decoupled into two clean modules without external agent frameworks:
+
+1. **Tool Definitions & Dispatch (`app/agent/tools.py`):**
+   - Implements OpenAI tool-calling schemas (`TOOL_SCHEMAS`) for all six Phase 1 analytical functions (`get_dataset_overview`, `get_summary_statistics`, `filter_data`, `analyze_correlations`, `generate_visualization`, `group_and_aggregate`).
+   - Local dispatcher (`execute_tool`) maps model tool calls directly to Python function calls on the DataFrame.
+   - Prevents arbitrary code execution — only the six registered analytical functions can be invoked.
+   - Converts NumPy scalars, NaNs, and infinities into JSON-safe primitives via recursive `to_json_safe`.
+   - Bounded DataFrame previews: `filter_data` returns row counts and a bounded preview (`preview_rows=5` by default) rather than transmitting whole tables into LLM context.
+   - Visualization handling: preserves Plotly `Figure` objects for application use, while returning concise summary descriptors to the LLM.
+
+2. **Agent Orchestration (`app/agent/agent.py`):**
+   - `AnalysisAgent` manages conversation state and the reasoning loop.
+   - Constructs grounded system prompt containing dataset structural metadata (row count, dtypes, missing value counts, and bounded sample preview).
+   - Iterative reasoning loop: sends user question and tool schemas to OpenAI, intercepts tool calls, executes them locally, feeds results back as `tool` messages, and continues until the model produces a final answer or `max_rounds` (default 6) is reached.
+   - Supports multiple tool calls in a single round.
+   - Enforces zero input DataFrame mutation.
+   - Returns structured `AgentResult` (final text answer, list of `ToolCallRecord`s, list of preserved `go.Figure`s, round count, model name, and error message if applicable).
+   - JSON serialization via `AgentResult.to_dict()`.
+
+3. **Configuration & Secrets:**
+   - Loads `.env` via `python-dotenv` for local development.
+   - Reads `OPENAI_API_KEY` and optional `OPENAI_MODEL` (default: `gpt-4o-mini`).
+   - Never logs, prints, or exposes API keys.
+
+4. **Terminal Runnable Example (`examples/agent_demo.py`):**
+   - Loads `examples/employee_analytics.csv`.
+   - Prompts the user for a natural-language question or accepts command-line arguments.
+   - Displays final answer, tool-calling reasoning chain, and execution summary.
+   - Automatically writes any generated Plotly figure to an interactive HTML file.
+
+---
+
+### Pytest Execution History
+
+- **Phase 1 Test Suite:** 112 passed in 0.63s
+- **Phase 2 Step 1 Agent Suite (`tests/test_agent.py`):** 23 passed in 0.70s
+- **Complete Suite:** **135 passed in 1.42s** (0 regressions, 0 warnings/failures).
+
+### Agent Test Coverage (`tests/test_agent.py`)
+
+- All 6 tool schemas validated for structure, parameters, and descriptions.
+- Individual tool dispatch and execution for each analytical function.
+- Unknown tool handling and rejection.
+- Tool execution error handling (e.g., non-existent columns).
+- JSON serialization of NumPy types, NaNs, infinities, and missing values.
+- Dataset metadata builder without whole-dataset transmission.
+- End-to-end tool-calling loop (question -> tool call -> tool result -> final answer).
+- Multiple tool calls within a single response round.
+- Multi-round reasoning chains across sequential turns.
+- Plotly figure preservation in `AgentResult.figures`.
+- Bounded preview verification on filtered DataFrames.
+- Strict input DataFrame immutability assertion.
+- Malformed JSON argument resilience and error propagation to the model.
+- Maximum round limit (`max_rounds`) enforcement.
+- OpenAI API exception handling (`OpenAIError`).
+- Missing API key detection with clear configuration error.
+- Full `AgentResult.to_dict()` structure contract.
+
+---
+
+### Remaining Limitations (Phase 2)
+
+- Single-turn analysis only (no conversational multi-turn session memory yet).
+- No streaming tokens (completions evaluated synchronously per round).
+- Single LLM provider supported (official OpenAI SDK).
+- Streamlit UI planned for Phase 3.
+
+---
 
 ## Phase 3 — Streamlit UI 🔲 NOT STARTED
+
 

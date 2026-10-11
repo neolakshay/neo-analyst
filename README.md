@@ -3,9 +3,9 @@
 **A beginner-friendly, technically sound Applied ML project** built for BYTE's Basic Applied ML task.
 
 The project is developed in phases:
-- **Phase 1 (current)** — Analytical engine: six data-analysis functions, validation datasets, and a full test suite.
-- Phase 2 *(planned)* — LLM agent that calls Phase 1 functions in response to natural-language questions.
-- Phase 3 *(planned)* — Streamlit UI.
+- **Phase 1** — Analytical engine: six data-analysis functions, validation datasets, and a full test suite.
+- **Phase 2 (Step 1 complete)** — Core LLM-powered data analysis agent that selects and executes Phase 1 tools via the official OpenAI tool-calling interface.
+- **Phase 3** *(planned)* — Streamlit UI.
 
 ---
 
@@ -21,26 +21,46 @@ neo-applied-ml/
 │
 ├── app/
 │   ├── __init__.py
-│   └── analysis/
-│       ├── __init__.py        # re-exports all six functions
-│       ├── overview.py        # get_dataset_overview
-│       ├── statistics.py      # get_summary_statistics
-│       ├── filtering.py       # filter_data
-│       ├── correlations.py    # analyze_correlations
-│       ├── visualization.py   # generate_visualization
-│       └── aggregation.py     # group_and_aggregate
+│   ├── analysis/              # Phase 1: Analytical Engine
+│   │   ├── __init__.py        # re-exports all six functions
+│   │   ├── overview.py        # get_dataset_overview
+│   │   ├── statistics.py      # get_summary_statistics
+│   │   ├── filtering.py       # filter_data
+│   │   ├── correlations.py    # analyze_correlations
+│   │   ├── visualization.py   # generate_visualization
+│   │   └── aggregation.py     # group_and_aggregate
+│   │
+│   └── agent/                 # Phase 2: LLM Analysis Agent
+│       ├── __init__.py        # AnalysisAgent, AgentResult, ToolCallRecord
+│       ├── tools.py           # Tool schemas & local execution dispatcher
+│       └── agent.py           # Multi-round tool-calling loop & orchestration
 │
 ├── examples/
 │   ├── sample_data.csv        # 20-row student dataset
 │   ├── ecommerce_sales.csv    # 150-row e-commerce sales dataset
 │   ├── employee_analytics.csv # 50-row employee analytics dataset
 │   ├── edge_cases.csv         # 20-row edge cases dataset
-│   └── demo.py                # runnable demonstration of all six functions
+│   ├── demo.py                # demonstration of all six analytical functions
+│   └── agent_demo.py          # interactive terminal demo of the LLM agent
 │
 └── tests/
-    ├── conftest.py       # shared pytest fixtures
-    └── test_analysis.py  # 112 unit tests
+    ├── conftest.py            # shared pytest fixtures
+    ├── test_analysis.py       # 112 analytical engine unit tests
+    └── test_agent.py          # 23 agent unit tests (mocked OpenAI client)
 ```
+
+---
+
+## Configuration
+
+The agent uses the official OpenAI Python SDK. Create a `.env` file in the project root (this file is excluded from git):
+
+```bash
+OPENAI_API_KEY=your_openai_api_key_here
+OPENAI_MODEL=gpt-4o-mini  # optional (default: gpt-4o-mini)
+```
+
+Environment variables are loaded automatically using `python-dotenv`.
 
 ---
 
@@ -64,14 +84,20 @@ pip install -r requirements.txt
 
 ---
 
-## Running the demo
+## Running the demos
 
+### 1. Analytical Engine Demo
 ```bash
 python -m examples.demo
 ```
-
 This prints a summary of all six analytical functions applied to the sample dataset,
 and saves an interactive Plotly scatter plot as `examples/scatter_demo.html`.
+
+### 2. LLM Analysis Agent Demo
+```bash
+python -m examples.agent_demo "Which department has the highest average salary?"
+```
+Or run interactively without arguments to input questions from the terminal. Generated Plotly charts are saved as HTML files in `examples/`.
 
 ---
 
@@ -81,7 +107,7 @@ and saves an interactive Plotly scatter plot as `examples/scatter_demo.html`.
 pytest tests/ -v
 ```
 
-Expected output: **112 passed**.
+Expected output: **135 passed** (112 analytical engine tests + 23 agent tests).
 
 ---
 
