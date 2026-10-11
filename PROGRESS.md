@@ -219,10 +219,60 @@ The agent is decoupled into two clean modules without external agent frameworks:
 - **Synchronous execution (no streaming):** Completions and tool calls are evaluated synchronously round-by-round without token streaming.
 - **Single LLM provider:** Built for the official OpenAI tool-calling API (`gpt-4o-mini` by default).
 - **Deterministic validator scope:** Rule-based verification focuses on concrete numbers, group metrics, causal claims, and failure consistency; open-ended qualitative reasoning remains `UNVERIFIABLE`.
-- **Streamlit UI:** Planned for Phase 3 (not yet started).
+- **Streamlit UI:** Completed and validated in Phase 3.
 
 ---
 
-## Phase 3 — Streamlit UI 🔲 NOT STARTED
+## Phase 3 — Streamlit UI ✅ COMPLETE & VALIDATED
+
+**Implementation Date:** 2026-10-11  
+
+---
+
+### Phase 3 Core Files
+
+| File | Purpose |
+|---|---|
+| `app/ui/__init__.py` | Package init for the UI module, exporting core helper functions |
+| `app/ui/utils.py` | CSV loading, validation, dataset metadata summary, tool call formatting, and agent execution wrapper |
+| `app/ui/app.py` | Main Streamlit web application with sidebar navigation, overview panels, chat interface, and Plotly rendering |
+| `tests/test_ui.py` | 27 automated tests covering CSV parsing, edge cases, metadata bounds, AppTest UI flows, grounding badges, figures, and state resets |
+
+---
+
+### Key Capabilities Delivered
+
+1. **Dataset Ingestion & Exploration:**
+   - Supports both uploading custom CSV files (`st.file_uploader`) and selecting from four bundled example datasets (`employee_analytics.csv`, `ecommerce_sales.csv`, `sample_data.csv`, `edge_cases.csv`).
+   - Handles empty files, non-existent paths, decoding fallback, and malformed CSVs with clear user-facing error messages instead of crashing.
+   - Provides instant overview metrics: row count, column count, total missing cells, column-level data types, non-null counts, and bounded data previews (top 10 rows).
+
+2. **Natural-Language Analysis:**
+   - Interactive prompt area with pre-configured quick-action sample questions.
+   - Explicit user-triggered analysis execution (`🚀 Analyze` button) with a visual spinner.
+   - Graceful detection and error messaging when `OPENAI_API_KEY` is missing without logging or leaking secrets.
+
+3. **Grounding Status Presentation:**
+   - **`VERIFIED` (Green):** Confirms that specific numerical or factual claims in the answer matched executed tool outputs. Shows expandable list of verified claims.
+   - **`FLAGGED` (Red):** Alerts the user that the grounding validator caught a concrete contradiction or unsupported assertion. Expands to display exact contradiction reasons.
+   - **`UNVERIFIABLE` (Info):** Explains that the deterministic validator could not verify all claims from tool artifacts (e.g. qualitative or derived statements), clarifying that unverifiable does not mean incorrect.
+
+4. **Visualizations & Tool Transparency:**
+   - Interactive Plotly figures embedded directly into the Streamlit flow with zooming and hovering.
+   - Expandable tool execution history showing tool names, arguments, execution status, and concise summaries without large JSON dumps.
+
+5. **Session State & Data Isolation:**
+   - Switching between datasets immediately resets prior query answers, questions, and figures so stale results never leak between datasets.
+   - Analysis executes on defensive copies (`df.copy()`) ensuring the user's dataset is never mutated.
+
+---
+
+### Pytest Execution History
+
+- **Phase 1 Baseline:** 112 passed
+- **Phase 2 Hardening & Agent:** 160 passed
+- **Phase 2 Audit:** 234 passed
+- **Phase 2 Grounding Validator & Adversarial Regression:** 297 passed
+- **Phase 3 Streamlit UI & Integration Suite:** **324 passed in 3.37s** (27 new tests in `tests/test_ui.py`).
 
 

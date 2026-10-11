@@ -5,7 +5,7 @@
 The project is developed in phases:
 - **Phase 1** — Analytical engine: six data-analysis functions, validation datasets, and a full test suite.
 - **Phase 2** — LLM-powered data analysis agent with multi-round tool calling, reliability hardening, and deterministic output grounding validation.
-- **Phase 3** *(planned)* — Streamlit UI.
+- **Phase 3** — Streamlit UI: clean interactive web application for CSV exploration, natural-language analysis, grounded answers, and Plotly charts.
 
 ---
 
@@ -30,11 +30,16 @@ neo-applied-ml/
 │   │   ├── visualization.py   # generate_visualization
 │   │   └── aggregation.py     # group_and_aggregate
 │   │
-│   └── agent/                 # Phase 2: LLM Analysis Agent
-│       ├── __init__.py        # AnalysisAgent, AgentResult, ToolCallRecord, GroundingResult
-│       ├── tools.py           # Tool schemas & local execution dispatcher
-│       ├── validator.py       # Deterministic output grounding validation
-│       └── agent.py           # Multi-round tool-calling loop & orchestration
+│   ├── agent/                 # Phase 2: LLM Analysis Agent
+│   │   ├── __init__.py        # AnalysisAgent, AgentResult, ToolCallRecord, GroundingResult
+│   │   ├── tools.py           # Tool schemas & local execution dispatcher
+│   │   ├── validator.py       # Deterministic output grounding validation
+│   │   └── agent.py           # Multi-round tool-calling loop & orchestration
+│   │
+│   └── ui/                    # Phase 3: Streamlit UI
+│       ├── __init__.py        # exports UI helpers
+│       ├── utils.py           # dataset loaders, metadata extraction, execution wrapper
+│       └── app.py             # Streamlit web application entrypoint
 │
 ├── examples/
 │   ├── sample_data.csv        # 20-row student dataset
@@ -49,7 +54,8 @@ neo-applied-ml/
     ├── test_analysis.py       # 112 analytical engine unit tests
     ├── test_agent.py          # 48 agent unit & reliability tests
     ├── test_audit.py          # 74 comprehensive audit tests
-    └── test_validator.py      # 63 output grounding validator & regression tests
+    ├── test_validator.py      # 63 output grounding validator & regression tests
+    └── test_ui.py             # 27 Streamlit UI and integration tests
 ```
 
 ---
@@ -102,6 +108,18 @@ python -m examples.agent_demo "Which department has the highest average salary?"
 ```
 Or run interactively without arguments to input questions from the terminal. Generated Plotly charts are saved as HTML files in `examples/`.
 
+### 3. Streamlit Web Interface (Phase 3)
+```bash
+streamlit run app/ui/app.py
+```
+Launches the interactive web application:
+- Upload any custom CSV or select one of the four bundled example datasets.
+- Review automatic dataset overview metrics, column data types, and bounded data previews.
+- Submit natural-language analytical questions and receive answers grounded in local tool execution.
+- Inspect collapsible tool execution records, arguments, and status details.
+- View clear grounding status banners (`VERIFIED`, `FLAGGED`, or `UNVERIFIABLE`).
+- Interact with generated Plotly charts directly inside the browser.
+
 ---
 
 ## Running the tests
@@ -110,7 +128,7 @@ Or run interactively without arguments to input questions from the terminal. Gen
 pytest tests/ -v
 ```
 
-Expected output: **297 passed** (112 analytical engine tests + 48 agent tests + 74 audit tests + 63 validator tests).
+Expected output: **324 passed** (112 analytical engine tests + 48 agent tests + 74 audit tests + 63 validator tests + 27 UI tests).
 
 ---
 
@@ -261,6 +279,25 @@ After the model produces a final natural-language response, the validator indepe
 
 ---
 
+## Phase 3: Streamlit User Interface
+
+The Streamlit interface (`app/ui/app.py`) provides an interactive web workspace wrapping the underlying `AnalysisAgent`.
+
+```bash
+streamlit run app/ui/app.py
+```
+
+### Key UI Features
+- **Dataset Input & Switching:** Supports uploading arbitrary CSV files or selecting from four built-in example datasets (`employee_analytics.csv`, `ecommerce_sales.csv`, `sample_data.csv`, `edge_cases.csv`). Switching datasets immediately resets prior query states to prevent stale result leakage.
+- **Defensive Data Handling:** Bounded previews (top 10 rows), column data type and nullity inspection, and defensive dataset copying to guarantee that analytical operations never mutate the user's source DataFrame.
+- **Natural-Language Analysis:** Direct query input with pre-filled analytical prompt buttons and a dedicated Analyze action that triggers agent execution.
+- **Transparent Execution Details:** Collapsible execution records showing tool names, parsed arguments, success/error status, and concise output summaries for every tool-call turn.
+- **Clear Grounding Status Indicators:** Prominently highlights validation outcomes (`VERIFIED` in green, `FLAGGED` in red/warning with detected discrepancies, `UNVERIFIABLE` with explanatory context).
+- **Interactive Visualizations:** Embeds generated Plotly charts directly into the Streamlit layout with full interactivity (zooming, hovering, panning).
+- **Session State Isolation:** Prevents expensive re-execution on simple UI interactions while maintaining visibility of previous analysis rounds within the session.
+
+---
+
 ## Known limitations
 
 ### Analytical Engine (Phase 1)
@@ -275,4 +312,7 @@ After the model produces a final natural-language response, the validator indepe
 - **Synchronous execution (no streaming):** Responses and tool calls are evaluated round-by-round without token streaming.
 - **Single LLM provider:** Built specifically for OpenAI tool-calling models (`gpt-4o-mini` by default).
 - **Deterministic validator scope:** Rule-based verification focuses on concrete numbers, group metrics, causal claims, and failure consistency; open-ended qualitative explanations remain `UNVERIFIABLE`.
-- **Streamlit UI:** The web UI is planned for Phase 3 and has not yet been built.
+
+### Streamlit UI (Phase 3)
+- **Stateless Agent Invocations:** The UI records session history for display, but each analysis query is dispatched independently to the agent without persistent multi-turn conversational context.
+- **Single-file uploads:** Supports one active CSV dataset at a time; cross-dataset joins are not supported.
