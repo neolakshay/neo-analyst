@@ -4,7 +4,7 @@
 
 The project is developed in phases:
 - **Phase 1** — Analytical engine: six data-analysis functions, validation datasets, and a full test suite.
-- **Phase 2 (Step 1 complete)** — Core LLM-powered data analysis agent that selects and executes Phase 1 tools via the official OpenAI tool-calling interface.
+- **Phase 2** — LLM-powered data analysis agent with multi-round tool calling, reliability hardening, and deterministic output grounding validation.
 - **Phase 3** *(planned)* — Streamlit UI.
 
 ---
@@ -110,7 +110,7 @@ Or run interactively without arguments to input questions from the terminal. Gen
 pytest tests/ -v
 ```
 
-Expected output: **257 passed** (112 analytical engine tests + 48 agent tests + 74 audit tests + 23 validator tests).
+Expected output: **297 passed** (112 analytical engine tests + 48 agent tests + 74 audit tests + 63 validator tests).
 
 ---
 
@@ -215,10 +215,64 @@ Multiple conditions are combined with **AND** (all must be true).
 
 ---
 
-## Known limitations (Phase 1)
+## Phase 2: LLM Data Analysis Agent
 
+The agent (`app/agent/agent.py`) accepts a pandas DataFrame and a natural-language question, inspects dataset metadata, selects and runs registered Phase 1 analytical tools locally, and returns a grounded answer.
+
+```python
+from app.agent import AnalysisAgent
+
+agent = AnalysisAgent()
+result = agent.run(df, "Which department has the highest average salary?")
+print(result.answer)
+```
+
+### Architecture & Capabilities
+- **Zero-framework design:** Built directly on the official OpenAI Python SDK without third-party agent frameworks.
+- **Iterative tool-calling loop:** Supports multi-round reasoning chains (up to `max_rounds`, default 6) where the model calls tools, receives structured results, and decides whether to invoke additional tools or finish.
+- **Safe tool dispatch (`app/agent/tools.py`):** Strictly executes only registered Phase 1 tools; rejects arbitrary code execution or unregistered tools.
+- **Bounded DataFrame previews:** Prevents context window saturation by returning matched row counts and bounded sample rows (`preview_rows=5` by default) rather than entire DataFrames.
+- **Figure preservation:** Generated Plotly charts are preserved as `go.Figure` objects in `result.figures` and can be exported as interactive HTML files.
+- **Structured results (`AgentResult`):** Contains `answer`, `tool_calls`, `figures`, `rounds`, `model`, `error`, and `grounding`.
+
+### Deterministic Output Grounding Validator (`app/agent/validator.py`)
+
+After the model produces a final natural-language response, the validator independently verifies whether factual and numerical claims in the answer agree with executed tool outputs:
+
+- **Correlation precision:** Compares claimed Pearson coefficients against actual matrix values with strict numerical tolerance (`abs_tol=0.01` or explicit single-decimal rounding match), strictly flagging materially incorrect claims (such as 0.81 or 0.90 for an actual r = 0.8525).
+- **Negation & causal claims:** Distinguishes honest disclaimers (e.g. *"correlation does not necessarily prove causation"*) from unsupported causal claims based solely on correlation. Clause-bounded negation analysis prevents negation tokens from bleeding across sentences.
+- **Superlative & group consistency:** Validates explicit group claims (e.g. *"Department X has the highest average salary"*) against actual grouped aggregation metrics, flagging non-maximum claims and contradictory assertions.
+- **Failure consistency:** Flags answers that falsely claim failed operations succeeded, while preserving honest failure explanations.
+- **Visualization claims:** Flags answers claiming a chart was generated when no figure object exists.
+
+#### Grounding Statuses:
+- **`VERIFIED`**: Specific verifiable factual or numerical claims examined in the answer are supported by relevant tool outputs.
+- **`FLAGGED`**: Concrete inconsistencies, false success claims, unperformed statistical tests (such as p-values), causal leaps from correlation, or contradictory numbers were detected. Sets `result.is_success = False`.
+- **`UNVERIFIABLE`**: The answer contains qualitative, derived, or speculative reasoning that cannot be deterministically verified or refuted against executed tool outputs.
+  - *Important note:* `UNVERIFIABLE` does **not** mean the answer is incorrect or false. It indicates that deterministic validation cannot prove or disprove the statement using available tool records alone.
+  - Deterministic validation catches concrete hallucinations and contradictions, but cannot guarantee complete factual correctness for arbitrary natural language.
+
+#### Status & Success Properties (`AgentResult`):
+- `result.execution_success`: `True` if the agent completed its reasoning loop without an execution error.
+- `result.is_success`: `True` only if execution succeeded **and** the answer was not `FLAGGED` by grounding validation.
+- `result.is_verified`: `True` if specific claims were verified against tool outputs.
+- `result.is_flagged`: `True` if grounding validation detected a concrete contradiction.
+- `result.error`: Preserved strictly for execution failures (`None` when only semantic grounding flags are raised), preventing conflation of operational and semantic issues.
+
+---
+
+## Known limitations
+
+### Analytical Engine (Phase 1)
 - `filter_data` combines conditions with AND only; OR logic is not yet supported.
 - `analyze_correlations` uses Pearson (linear) correlation only; Spearman / Kendall are not available.
 - `generate_visualization` does not support pie charts, heatmaps, or multi-panel layouts.
 - No support for datetime columns in filtering or visualisation beyond treating them as strings.
 - `group_and_aggregate` does not support custom lambda expressions or window functions (limited to the 6 core aggregation operations).
+
+### LLM Agent & Grounding (Phase 2)
+- **Single-turn conversational memory:** The agent supports multi-round tool-calling reasoning chains within a single request, but does not maintain conversational session memory across separate user interactions.
+- **Synchronous execution (no streaming):** Responses and tool calls are evaluated round-by-round without token streaming.
+- **Single LLM provider:** Built specifically for OpenAI tool-calling models (`gpt-4o-mini` by default).
+- **Deterministic validator scope:** Rule-based verification focuses on concrete numbers, group metrics, causal claims, and failure consistency; open-ended qualitative explanations remain `UNVERIFIABLE`.
+- **Streamlit UI:** The web UI is planned for Phase 3 and has not yet been built.

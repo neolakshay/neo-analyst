@@ -156,7 +156,8 @@ The agent is decoupled into two clean modules without external agent frameworks:
 - **Phase 2 Step 1 Initial Agent Suite (`tests/test_agent.py`):** 23 passed in 0.70s (135 total)
 - **Phase 2 Hardening Passes (`tests/test_agent.py` expanded to 48 tests):** 160 passed in 1.85s
 - **Phase 2 Comprehensive Testing & Audit Pass (`tests/test_audit.py` added with 74 tests):** 234 passed in 1.59s
-- **Phase 2 Output Grounding Validator (`app/agent/validator.py` + `tests/test_validator.py` with 23 tests):** **257 passed in 2.00s** (0 regressions, 0 warnings/failures).
+- **Phase 2 Output Grounding Validator Initial Pass (`tests/test_validator.py` with 23 tests):** 257 passed in 2.00s
+- **Phase 2 Validator Adversarial Hardening Pass (`tests/test_validator.py` expanded to 63 tests):** **297 passed in 1.82s** (0 regressions, 0 warnings/failures across all 297 tests).
 
 ### Agent Test Coverage (`tests/test_agent.py`, `tests/test_audit.py`, `tests/test_validator.py`)
 
@@ -194,11 +195,14 @@ The agent is decoupled into two clean modules without external agent frameworks:
    - `UNVERIFIABLE`: Answer contains qualitative, derived, or speculative natural-language statements that cannot be deterministically verified or refuted using the available tool outputs. (UNVERIFIABLE is not treated as incorrect).
 
 2. **Deterministic Checks Implemented:**
+   - **Correlation Precision & Token Matching:** Strict numerical tolerance (`abs_tol=0.01` or explicit 1-decimal rounding match); natural-language column stem matching (e.g. `experience` for `experience_years`).
+   - **Clause-Bounded Negation:** Scopes negation to individual clauses, preventing negation tokens from bleeding across sentences or contrastive conjunctions (`however`, `but`, `while`), while supporting intervening adverbs in genuine disclaimers (*"does not necessarily prove"*).
+   - **Group & Superlative Consistency:** Validates claims about the highest-average-salary department against actual grouped aggregations; flags conflicting claims asserting multiple departments as highest.
    - **Tool Failure Consistency:** Tracks unresolved tool failures vs recovered retries; flags answers that falsely claim failed tools succeeded, while preserving honest failure explanations.
-   - **Numerical Consistency:** Verifies and normalizes numbers (commas, decimals, currency symbols) against explicit group metrics in `group_and_aggregate`, row counts in `filter_data`, dimensions in `get_dataset_overview`, and coefficients in `analyze_correlations`. Detects and flags explicit contradictions without matching numbers from unrelated tools.
+   - **Numerical Consistency:** Verifies and normalizes numbers (commas, decimals, currency symbols) against explicit group metrics in `group_and_aggregate`, row counts in `filter_data`, dimensions in `get_dataset_overview` (including comma-formatted rows), and coefficients in `analyze_correlations`. Detects and flags explicit contradictions without matching numbers from unrelated tools.
    - **Unsupported Analytical Claims:** Detects and flags claims of statistical significance / p-values (no engine tool computes p-values) and causal claims based on correlation.
    - **Visualization Verification:** Flags answers claiming a chart was created when `len(figures) == 0`.
-   - **Negation Awareness:** Distinguishes honest disclaimers ("no statistical significance was found", "does not prove causation") from positive claims.
+   - **Defensive & Safe Input Handling:** Non-string inputs fail safely as `UNVERIFIABLE` without crashing; non-finite floats (NaN/Inf) in tool outputs are handled defensively.
 
 3. **Status & Success Semantics (`AgentResult`):**
    - `execution_success`: boolean indicating whether the execution loop succeeded without error.
@@ -211,11 +215,11 @@ The agent is decoupled into two clean modules without external agent frameworks:
 
 ### Remaining Limitations (Phase 2)
 
-- Single-turn analysis only (no conversational multi-turn session memory yet).
-- No streaming tokens (completions evaluated synchronously per round).
-- Single LLM provider supported (official OpenAI SDK).
-- Deterministic checks cannot verify arbitrary open-ended natural-language reasoning (such answers are safely classified as `UNVERIFIABLE`).
-- Streamlit UI planned for Phase 3.
+- **Single-turn conversational memory:** The agent supports multi-round tool-calling chains within a single analysis, but does not maintain conversation history across independent questions.
+- **Synchronous execution (no streaming):** Completions and tool calls are evaluated synchronously round-by-round without token streaming.
+- **Single LLM provider:** Built for the official OpenAI tool-calling API (`gpt-4o-mini` by default).
+- **Deterministic validator scope:** Rule-based verification focuses on concrete numbers, group metrics, causal claims, and failure consistency; open-ended qualitative reasoning remains `UNVERIFIABLE`.
+- **Streamlit UI:** Planned for Phase 3 (not yet started).
 
 ---
 
