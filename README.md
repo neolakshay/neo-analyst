@@ -3,7 +3,7 @@
 **A beginner-friendly, technically sound Applied ML project** built for BYTE's Basic Applied ML task.
 
 The project is developed in phases:
-- **Phase 1 (current)** — Analytical engine: five data-analysis functions, a sample dataset, and a full test suite.
+- **Phase 1 (current)** — Analytical engine: six data-analysis functions, validation datasets, and a full test suite.
 - Phase 2 *(planned)* — LLM agent that calls Phase 1 functions in response to natural-language questions.
 - Phase 3 *(planned)* — Streamlit UI.
 
@@ -22,20 +22,24 @@ neo-applied-ml/
 ├── app/
 │   ├── __init__.py
 │   └── analysis/
-│       ├── __init__.py        # re-exports all five functions
+│       ├── __init__.py        # re-exports all six functions
 │       ├── overview.py        # get_dataset_overview
 │       ├── statistics.py      # get_summary_statistics
 │       ├── filtering.py       # filter_data
 │       ├── correlations.py    # analyze_correlations
-│       └── visualization.py   # generate_visualization
+│       ├── visualization.py   # generate_visualization
+│       └── aggregation.py     # group_and_aggregate
 │
 ├── examples/
-│   ├── sample_data.csv   # 20-row synthetic student dataset
-│   └── demo.py           # runnable demonstration of all five functions
+│   ├── sample_data.csv        # 20-row student dataset
+│   ├── ecommerce_sales.csv    # 150-row e-commerce sales dataset
+│   ├── employee_analytics.csv # 50-row employee analytics dataset
+│   ├── edge_cases.csv         # 20-row edge cases dataset
+│   └── demo.py                # runnable demonstration of all six functions
 │
 └── tests/
     ├── conftest.py       # shared pytest fixtures
-    └── test_analysis.py  # 72 unit tests
+    └── test_analysis.py  # 112 unit tests
 ```
 
 ---
@@ -66,7 +70,7 @@ pip install -r requirements.txt
 python -m examples.demo
 ```
 
-This prints a summary of all five analytical functions applied to the sample dataset,
+This prints a summary of all six analytical functions applied to the sample dataset,
 and saves an interactive Plotly scatter plot as `examples/scatter_demo.html`.
 
 ---
@@ -77,11 +81,11 @@ and saves an interactive Plotly scatter plot as `examples/scatter_demo.html`.
 pytest tests/ -v
 ```
 
-Expected output: **72 passed**.
+Expected output: **112 passed**.
 
 ---
 
-## The five analytical functions
+## The six analytical functions
 
 All functions live in `app/analysis/` and are importable from the package:
 
@@ -92,6 +96,7 @@ from app.analysis import (
     filter_data,
     analyze_correlations,
     generate_visualization,
+    group_and_aggregate,
 )
 ```
 
@@ -102,6 +107,66 @@ from app.analysis import (
 | `filter_data(df, conditions)` | Filter rows by one or more column conditions | `pd.DataFrame` |
 | `analyze_correlations(df, columns, top_n)` | Pearson correlation matrix + top pairs | `dict` |
 | `generate_visualization(df, chart_type, ...)` | bar / line / scatter / histogram / box chart | `plotly.Figure` |
+| `group_and_aggregate(df, group_by, aggregations, dropna)` | Group by 1+ columns and compute summary statistics | `dict` |
+
+### `group_and_aggregate` — grouped summary statistics
+
+Groups tabular data using pandas groupby and calculates summary statistics per group.
+
+Supported operations:
+- `mean` — arithmetic average of non-null values (numeric only)
+- `median` — middle non-null value (numeric only)
+- `sum` — sum of non-null values (numeric only)
+- `min` — minimum non-null value
+- `max` — maximum non-null value
+- `count` — non-null observation count for the target column
+
+#### Example call:
+
+```python
+result = group_and_aggregate(
+    df,
+    group_by=["department"],
+    aggregations={
+        "salary": ["mean", "median", "max"],
+        "employee_id": ["count"],
+    },
+    dropna=True,
+)
+```
+
+#### Return format:
+
+```json
+{
+  "group_by": ["department"],
+  "aggregations": {
+    "salary": ["mean", "median", "max"],
+    "employee_id": ["count"]
+  },
+  "group_count": 2,
+  "results": [
+    {
+      "department": "Engineering",
+      "salary_mean": 1250000.0,
+      "salary_median": 1200000.0,
+      "salary_max": 1800000.0,
+      "employee_id_count": 8
+    },
+    {
+      "department": "Sales",
+      "salary_mean": 950000.0,
+      "salary_median": 900000.0,
+      "salary_max": 1400000.0,
+      "employee_id_count": 6
+    }
+  ]
+}
+```
+
+The output contains standard Python types (`dict`, `list`, `str`, `int`, `float`, `None`) and is fully JSON-serializable.
+
+---
 
 ### `filter_data` — supported operators
 
@@ -127,4 +192,4 @@ Multiple conditions are combined with **AND** (all must be true).
 - `analyze_correlations` uses Pearson (linear) correlation only; Spearman / Kendall are not available.
 - `generate_visualization` does not support pie charts, heatmaps, or multi-panel layouts.
 - No support for datetime columns in filtering or visualisation beyond treating them as strings.
-- The sample dataset is small (20 rows) and synthetic; real-world datasets will surface additional edge cases.
+- `group_and_aggregate` does not support custom lambda expressions or window functions (limited to the 6 core aggregation operations).

@@ -15,19 +15,20 @@
 | `requirements.txt` | `pandas`, `numpy`, `plotly`, `pytest` |
 | `pyproject.toml` | Configures pytest root path and test collection |
 | `app/__init__.py` | Marks `app/` as a Python package |
-| `app/analysis/__init__.py` | Re-exports all five public functions |
+| `app/analysis/__init__.py` | Re-exports all six public functions |
 | `app/analysis/overview.py` | `get_dataset_overview` |
 | `app/analysis/statistics.py` | `get_summary_statistics` |
 | `app/analysis/filtering.py` | `filter_data` |
 | `app/analysis/correlations.py` | `analyze_correlations` |
 | `app/analysis/visualization.py` | `generate_visualization` |
+| `app/analysis/aggregation.py` | `group_and_aggregate` |
 | `examples/sample_data.csv` | 20-row student dataset |
 | `examples/ecommerce_sales.csv` | 150-row e-commerce sales dataset |
 | `examples/employee_analytics.csv` | 50-row employee analytics dataset |
 | `examples/edge_cases.csv` | 20-row edge-cases dataset |
-| `examples/demo.py` | Runnable demonstration of all five functions |
+| `examples/demo.py` | Runnable demonstration of all six functions |
 | `tests/conftest.py` | Shared pytest fixtures (including all 4 datasets) |
-| `tests/test_analysis.py` | 86 unit & regression tests |
+| `tests/test_analysis.py` | 112 unit & regression tests |
 
 ---
 
@@ -53,6 +54,7 @@
 | `filter_data` | Verified (all 9 ops) | Verified (multi-AND) | Verified (categorical & numeric) | Verified (nulls, outliers, text) | ✅ PASS |
 | `analyze_correlations` | Verified (4 cols, 6 pairs) | Verified (3 cols, 3 pairs) | Verified (3 cols, positive pairs) | Verified (3 cols, perfect & outliers) | ✅ PASS |
 | `generate_visualization` | Scatter, Bar, Hist, Box | Scatter, Hist, Line, Box | Scatter, Box, Bar | Scatter, Hist, Bar | ✅ PASS |
+| `group_and_aggregate` | Verified (grade -> score, hours) | Verified (category/region -> qty, price) | Verified (dept -> salary, exp) | Verified (dept -> score, bonus) | ✅ PASS |
 
 ---
 
@@ -76,10 +78,25 @@
 
 ---
 
+### Sixth Function Addition: `group_and_aggregate`
+
+- **Implementation:** Added `app/analysis/aggregation.py` and exported via `app/analysis/__init__.py`.
+- **Capabilities:**
+  - Grouping by single or multiple columns.
+  - Six core aggregation operations: `mean`, `median`, `sum`, `min`, `max`, `count`.
+  - Non-null counting per target column.
+  - Missing grouping values handling with `dropna=True` and `dropna=False`.
+  - Output column name collision detection (`{column}_{op}` collisions with grouping keys or each other).
+  - Strict type checking and validation: rejects non-numeric operations (`mean`, `median`, `sum`) on non-numeric columns with clear `ValueError`.
+  - JSON-serializable output structure with native Python types (`int`, `float`, `str`, `bool`, `None`).
+
+---
+
 ### Pytest Execution History
 
 - **Initial Implementation:** 72 passed in 0.74s
-- **Post-Validation & Regression Suite:** **86 passed in 0.71s** (14 new tests added covering all confirmed bugs, edge cases, and multi-dataset end-to-end pipelines).
+- **Post-Validation & Regression Suite:** 86 passed in 0.71s
+- **Sixth Function Suite (`group_and_aggregate`):** **112 passed in 0.63s** (26 new tests covering all grouped aggregation requirements, edge cases, and datasets).
 
 ---
 
@@ -89,12 +106,13 @@
 - `analyze_correlations` supports Pearson linear correlation only (Spearman rank and Kendall tau not supported).
 - `generate_visualization` supports single-subplot bar, line, scatter, histogram, and box charts only (no heatmaps, pies, or faceted subplots).
 - Datetime columns are handled as generic string/object types rather than temporal types.
+- `group_and_aggregate` supports the 6 standard aggregation operations (`mean`, `median`, `sum`, `min`, `max`, `count`), without custom user lambda expressions or window functions.
 
 ---
 
 ## Phase 2 — LLM Agent 🔲 READY TO BEGIN
 
-**Phase 1 Status:** 100% Validated, Numerically Verified, and Ready for Phase 2 integration.
+**Phase 1 Status:** 100% Implemented (all 6 tools), Validated, and Ready for Phase 2 integration.
 
 The analytical engine functions now have strict input validation, clear error contracts, JSON-compliant return values, and rock-solid edge-case handling across multiple real-world schemas.
 

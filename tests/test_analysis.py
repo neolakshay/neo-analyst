@@ -8,6 +8,7 @@ Each test method is named test_<what_is_being_tested>.
 Run with:  pytest tests/ -v
 """
 
+import json
 import math
 import pandas as pd
 import pytest
@@ -18,6 +19,7 @@ from app.analysis import (
     filter_data,
     analyze_correlations,
     generate_visualization,
+    group_and_aggregate,
 )
 
 
@@ -606,4 +608,312 @@ class TestMultiDatasetValidation:
             edge_cases_df, "bar", x_column="id", y_column="score"
         )
         assert fig_bar is not None
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 8. group_and_aggregate tests
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestGroupAndAggregate:
+
+    @pytest.fixture
+    def employees_sample(self) -> pd.DataFrame:
+        """Controlled synthetic employee DataFrame."""
+        return pd.DataFrame({
+            "department": ["Engineering", "Engineering", "Marketing", "Marketing", "Sales"],
+            "salary": [100000.0, 150000.0, 80000.0, 90000.0, 70000.0],
+            "bonus": [10000.0, 15000.0, None, 5000.0, 7000.0],
+            "level": ["Senior", "Staff", "Junior", "Senior", "Junior"],
+        })
+
+    def test_group_by_one_categorical_and_calculate_mean(self, employees_sample):
+        result = group_and_aggregate(
+            employees_sample,
+            group_by=["department"],
+            aggregations={"salary": ["mean"]},
+        )
+        assert result["group_by"] == ["department"]
+        assert result["aggregations"] == {"salary": ["mean"]}
+        assert result["group_count"] == 3
+
+        # Lookup by department
+        eng = next(r for r in result["results"] if r["department"] == "Engineering")
+        assert eng["salary_mean"] == 125000.0
+        mkt = next(r for r in result["results"] if r["department"] == "Marketing")
+        assert mkt["salary_mean"] == 85000.0
+        sales = next(r for r in result["results"] if r["department"] == "Sales")
+        assert sales["salary_mean"] == 70000.0
+
+    def test_group_by_one_column_multiple_operations(self, employees_sample):
+        result = group_and_aggregate(
+            employees_sample,
+            group_by=["department"],
+            aggregations={"salary": ["mean", "median", "sum", "min", "max", "count"]},
+        )
+        eng = next(r for r in result["results"] if r["department"] == "Engineering")
+        assert eng["salary_mean"] == 125000.0
+        assert eng["salary_median"] == 125000.0
+        assert eng["salary_sum"] == 250000.0
+        assert eng["salary_min"] == 100000.0
+        assert eng["salary_max"] == 150000.0
+        assert eng["salary_count"] == 2
+        assert isinstance(eng["salary_count"], int)
+
+    def test_group_by_one_column_aggregate_multiple_numeric_columns(self, employees_sample):
+        result = group_and_aggregate(
+            employees_sample,
+            group_by=["department"],
+            aggregations={
+                "salary": ["mean"],
+                "bonus": ["sum", "count"],
+            },
+        )
+        eng = next(r for r in result["results"] if r["department"] == "Engineering")
+        assert "salary_mean" in eng
+        assert "bonus_sum" in eng
+        assert "bonus_count" in eng
+        assert eng["bonus_sum"] == 25000.0
+        assert eng["bonus_count"] == 2
+
+    def test_group_by_multiple_columns(self, employees_sample):
+        result = group_and_aggregate(
+            employees_sample,
+            group_by=["department", "level"],
+            aggregations={"salary": ["mean"]},
+        )
+        assert result["group_by"] == ["department", "level"]
+        # 5 distinct (department, level) pairs
+        assert result["group_count"] == 5
+        eng_senior = next(
+            r for r in result["results"]
+            if r["department"] == "Engineering" and r["level"] == "Senior"
+        )
+        assert eng_senior["salary_mean"] == 100000.0
+
+    def test_count_non_null_values_with_missing_values(self, employees_sample):
+        result = group_and_aggregate(
+            employees_sample,
+            group_by=["department"],
+            aggregations={"bonus": ["count"]},
+        )
+        mkt = next(r for r in result["results"] if r["department"] == "Marketing")
+        # Marketing has 2 rows but only 1 non-null bonus
+        assert mkt["bonus_count"] == 1
+
+    def test_missing_grouping_values_dropna_true(self):
+        df = pd.DataFrame({
+            "dept": ["Eng", "Eng", None],
+            "salary": [100.0, 200.0, 300.0],
+        })
+        result = group_and_aggregate(
+            df, group_by=["dept"], aggregations={"salary": ["mean"]}, dropna=True
+        )
+        assert result["group_count"] == 1
+        assert result["results"][0]["dept"] == "Eng"
+        assert result["results"][0]["salary_mean"] == 150.0
+
+    def test_missing_grouping_values_dropna_false(self):
+        df = pd.DataFrame({
+            "dept": ["Eng", "Eng", None],
+            "salary": [100.0, 200.0, 300.0],
+        })
+        result = group_and_aggregate(
+            df, group_by=["dept"], aggregations={"salary": ["mean"]}, dropna=False
+        )
+        assert result["group_count"] == 2
+        null_group = next(r for r in result["results"] if r["dept"] is None)
+        assert null_group["salary_mean"] == 300.0
+
+    def test_no_matching_non_null_groups_returns_documented_structure(self):
+        df = pd.DataFrame({
+            "dept": [None, None],
+            "salary": [100.0, 200.0],
+        })
+        result = group_and_aggregate(
+            df, group_by=["dept"], aggregations={"salary": ["mean"]}, dropna=True
+        )
+        assert result["group_by"] == ["dept"]
+        assert result["aggregations"] == {"salary": ["mean"]}
+        assert result["group_count"] == 0
+        assert result["results"] == []
+
+    def test_empty_dataframe_with_valid_columns(self):
+        df = pd.DataFrame(columns=["dept", "salary"])
+        result = group_and_aggregate(
+            df, group_by=["dept"], aggregations={"salary": ["mean"]}
+        )
+        assert result["group_by"] == ["dept"]
+        assert result["group_count"] == 0
+        assert result["results"] == []
+
+    def test_reject_non_dataframe_input(self):
+        with pytest.raises(TypeError, match="Expected a pandas DataFrame"):
+            group_and_aggregate(
+                {"dept": ["Eng"], "salary": [100]},
+                group_by=["dept"],
+                aggregations={"salary": ["mean"]},
+            )
+
+    def test_reject_empty_group_by_list(self, clean_df):
+        with pytest.raises(ValueError, match="'group_by' must contain at least one"):
+            group_and_aggregate(clean_df, group_by=[], aggregations={"x": ["mean"]})
+
+    def test_reject_nonexistent_grouping_column(self, clean_df):
+        with pytest.raises(ValueError, match="Grouping column 'ghost' does not exist"):
+            group_and_aggregate(clean_df, group_by=["ghost"], aggregations={"x": ["mean"]})
+
+    def test_reject_empty_aggregations_dict(self, clean_df):
+        with pytest.raises(ValueError, match="'aggregations' dictionary must contain"):
+            group_and_aggregate(clean_df, group_by=["category"], aggregations={})
+
+    def test_reject_nonexistent_aggregation_column(self, clean_df):
+        with pytest.raises(ValueError, match="Aggregation column 'ghost' does not exist"):
+            group_and_aggregate(
+                clean_df, group_by=["category"], aggregations={"ghost": ["mean"]}
+            )
+
+    def test_reject_unsupported_aggregation_operation(self, clean_df):
+        with pytest.raises(ValueError, match="Unsupported aggregation operation 'std'"):
+            group_and_aggregate(
+                clean_df, group_by=["category"], aggregations={"x": ["std"]}
+            )
+
+    def test_reject_invalid_parameter_types(self, clean_df):
+        # group_by not a list
+        with pytest.raises(TypeError, match="'group_by' must be a list"):
+            group_and_aggregate(clean_df, group_by="category", aggregations={"x": ["mean"]})
+
+        # group_by contains non-string
+        with pytest.raises(TypeError, match="All column names in 'group_by' must be strings"):
+            group_and_aggregate(clean_df, group_by=[123], aggregations={"x": ["mean"]})
+
+        # aggregations not a dict
+        with pytest.raises(TypeError, match="'aggregations' must be a dictionary"):
+            group_and_aggregate(clean_df, group_by=["category"], aggregations=["mean"])
+
+        # aggregations column has non-list operations
+        with pytest.raises(TypeError, match="Operations for column 'x' must be a list"):
+            group_and_aggregate(clean_df, group_by=["category"], aggregations={"x": "mean"})
+
+        # aggregations operation is not a string
+        with pytest.raises(TypeError, match="All operations for column 'x' must be strings"):
+            group_and_aggregate(clean_df, group_by=["category"], aggregations={"x": [123]})
+
+        # dropna not a boolean
+        with pytest.raises(TypeError, match="'dropna' must be a boolean"):
+            group_and_aggregate(
+                clean_df, group_by=["category"], aggregations={"x": ["mean"]}, dropna="yes"
+            )
+
+    def test_input_dataframe_not_mutated(self, clean_df):
+        df_copy = clean_df.copy()
+        group_and_aggregate(clean_df, group_by=["category"], aggregations={"x": ["mean"]})
+        assert clean_df.equals(df_copy)
+
+    def test_results_contain_no_nan_or_inf(self):
+        # When all target values in a group are NaN
+        df = pd.DataFrame({
+            "dept": ["Eng", "Sales"],
+            "score": [float("nan"), 100.0],
+        })
+        result = group_and_aggregate(
+            df, group_by=["dept"], aggregations={"score": ["mean"]}
+        )
+        eng = next(r for r in result["results"] if r["dept"] == "Eng")
+        # Undefined mean should be converted to None, not float('nan')
+        assert eng["score_mean"] is None
+
+        # Verify no NaN or Inf in entire structure
+        for record in result["results"]:
+            for key, val in record.items():
+                if isinstance(val, float):
+                    assert not math.isnan(val)
+                    assert not math.isinf(val)
+
+    def test_column_names_containing_spaces_and_punctuation(self):
+        df = pd.DataFrame({
+            "dept name": ["Eng", "Sales", "Eng"],
+            "unit price ($)": [10.5, 20.0, 30.5],
+        })
+        result = group_and_aggregate(
+            df,
+            group_by=["dept name"],
+            aggregations={"unit price ($)": ["mean", "sum"]},
+        )
+        assert result["group_count"] == 2
+        eng = next(r for r in result["results"] if r["dept name"] == "Eng")
+        assert eng["unit price ($)_mean"] == 20.5
+        assert eng["unit price ($)_sum"] == 41.0
+
+    def test_output_format_is_json_serializable(self, employees_sample):
+        result = group_and_aggregate(
+            employees_sample,
+            group_by=["department"],
+            aggregations={"salary": ["mean", "max"], "bonus": ["count"]},
+        )
+        # Must serialize cleanly without errors
+        serialized = json.dumps(result)
+        assert isinstance(serialized, str)
+
+        # Round-trip verify
+        deserialized = json.loads(serialized)
+        assert deserialized["group_count"] == result["group_count"]
+        assert deserialized["group_by"] == result["group_by"]
+
+    def test_reject_output_name_collision(self):
+        # Collision between group_by column name and output aggregation name
+        df = pd.DataFrame({
+            "salary_mean": ["A", "B"],
+            "salary": [100.0, 200.0],
+        })
+        with pytest.raises(ValueError, match="Output column name collision"):
+            group_and_aggregate(
+                df, group_by=["salary_mean"], aggregations={"salary": ["mean"]}
+            )
+
+    def test_reject_duplicate_group_by_columns(self, clean_df):
+        with pytest.raises(ValueError, match="duplicate column"):
+            group_and_aggregate(
+                clean_df, group_by=["category", "category"], aggregations={"x": ["mean"]}
+            )
+
+    def test_reject_duplicate_operations_on_same_column(self, clean_df):
+        with pytest.raises(ValueError, match="Duplicate aggregation operation"):
+            group_and_aggregate(
+                clean_df, group_by=["category"], aggregations={"x": ["mean", "mean"]}
+            )
+
+    def test_reject_numeric_operations_on_non_numeric_columns(self):
+        df = pd.DataFrame({
+            "dept": ["Eng", "Sales"],
+            "name": ["Alice", "Bob"],
+        })
+        with pytest.raises(ValueError, match="requires a numeric column"):
+            group_and_aggregate(
+                df, group_by=["dept"], aggregations={"name": ["mean"]}
+            )
+
+    def test_group_and_aggregate_on_employee_dataset(self, employee_df):
+        result = group_and_aggregate(
+            employee_df,
+            group_by=["department"],
+            aggregations={"salary": ["mean", "count"], "experience_years": ["max"]},
+            dropna=True,
+        )
+        assert result["group_count"] > 0
+        eng = next(r for r in result["results"] if r["department"] == "Engineering")
+        assert eng["salary_mean"] > 0
+        assert eng["salary_count"] == 8
+
+    def test_group_and_aggregate_on_ecommerce_dataset(self, ecommerce_df):
+        result = group_and_aggregate(
+            ecommerce_df,
+            group_by=["category", "region"],
+            aggregations={"quantity": ["sum"], "unit_price": ["mean"]},
+            dropna=True,
+        )
+        assert result["group_count"] > 0
+        assert "quantity_sum" in result["results"][0]
+        assert "unit_price_mean" in result["results"][0]
+
 

@@ -22,6 +22,7 @@ from app.analysis import (
     filter_data,
     analyze_correlations,
     generate_visualization,
+    group_and_aggregate,
 )
 
 # ── Load the sample dataset ───────────────────────────────────────────────────
@@ -84,6 +85,19 @@ fig = generate_visualization(
 )
 out_path = pathlib.Path(__file__).parent / "scatter_demo.html"
 fig.write_html(str(out_path))
-print(f"  Scatter plot saved to: {out_path}")
+# 6. Group and aggregate
+print("\n--- 6. Group and Aggregate ---")
+grouped_summary = group_and_aggregate(
+    df,
+    group_by=["grade"],
+    aggregations={
+        "score": ["mean", "max"],
+        "student_id": ["count"],
+    },
+    dropna=True,
+)
+print(f"  Grouped by grade ({grouped_summary['group_count']} groups):")
+for grp in grouped_summary["results"]:
+    print(f"    Grade {grp['grade']}: count={grp['student_id_count']}, mean_score={grp['score_mean']}, max_score={grp['score_max']}")
 
 print("\nDemo complete!")

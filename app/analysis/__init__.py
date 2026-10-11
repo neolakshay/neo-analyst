@@ -8,6 +8,7 @@ from app.analysis.statistics import get_summary_statistics
 from app.analysis.filtering import filter_data
 from app.analysis.correlations import analyze_correlations
 from app.analysis.visualization import generate_visualization
+from app.analysis.aggregation import group_and_aggregate
 
 __all__ = [
     "get_dataset_overview",
@@ -15,4 +16,5 @@ __all__ = [
     "filter_data",
     "analyze_correlations",
     "generate_visualization",
+    "group_and_aggregate",
 ]
