@@ -21,7 +21,7 @@ from app.agent import (
     TOOL_SCHEMAS,
     execute_tool,
 )
-from app.agent.agent import build_dataset_metadata
+from app.agent.agent import build_dataset_metadata, _parse_tool_arguments, _validate_tool_call_entry
 from app.agent.tools import to_json_safe, REGISTERED_TOOL_NAMES
 
 
@@ -55,11 +55,12 @@ def make_tool_call(call_id: str, name: str, arguments: dict | str):
     return tc
 
 
-def make_completion(content: str = None, tool_calls: list = None):
+def make_completion(content: str = None, tool_calls: list = None, finish_reason: str = None):
     """Helper to create a mocked ChatCompletion response."""
     choice = MagicMock()
     choice.message.content = content
     choice.message.tool_calls = tool_calls or []
+    choice.finish_reason = finish_reason
     resp = MagicMock()
     resp.choices = [choice]
     return resp
@@ -383,6 +384,8 @@ def test_agent_max_rounds_enforcement(sample_df):
     assert len(result.tool_calls) == 3
     assert result.error is not None
     assert "Exhausted maximum tool-calling rounds" in result.error
+    # Max-rounds termination must NOT produce a fabricated success answer
+    assert result.answer == ""
 
 
 def test_agent_openai_api_error(sample_df):
@@ -451,3 +454,359 @@ def test_agent_result_to_dict():
     assert d["tool_calls"][0]["tool_name"] == "get_dataset_overview"
     assert d["model"] == "gpt-4o-mini"
     assert d["error"] is None
+
+
+# ── 6. Response Structure Hardening ──────────────────────────────────────────
+
+def test_agent_empty_choices_returns_error(sample_df):
+    """Empty choices list in API response produces a structured error, not an exception."""
+    mock_client = MagicMock()
+    bad_resp = MagicMock()
+    bad_resp.choices = []  # Empty list — would cause IndexError without guard
+    mock_client.chat.completions.create.return_value = bad_resp
+
+    agent = AnalysisAgent(client=mock_client)
+    result = agent.run(sample_df, "Any question.")
+
+    assert result.error is not None
+    assert "choices" in result.error.lower() or "empty" in result.error.lower()
+    assert result.answer == ""
+    assert result.rounds == 1
+
+
+def test_agent_none_choices_returns_error(sample_df):
+    """None choices in API response produces a structured error, not an exception."""
+    mock_client = MagicMock()
+    bad_resp = MagicMock()
+    bad_resp.choices = None
+    mock_client.chat.completions.create.return_value = bad_resp
+
+    agent = AnalysisAgent(client=mock_client)
+    result = agent.run(sample_df, "Any question.")
+
+    assert result.error is not None
+    assert result.answer == ""
+    assert result.rounds == 1
+
+
+def test_agent_none_message_returns_error(sample_df):
+    """None message on a choice produces a structured error, not an exception."""
+    mock_client = MagicMock()
+    bad_choice = MagicMock()
+    bad_choice.message = None
+    bad_resp = MagicMock()
+    bad_resp.choices = [bad_choice]
+    mock_client.chat.completions.create.return_value = bad_resp
+
+    agent = AnalysisAgent(client=mock_client)
+    result = agent.run(sample_df, "Any question.")
+
+    assert result.error is not None
+    assert "message" in result.error.lower() or "none" in result.error.lower()
+    assert result.answer == ""
+    assert result.rounds == 1
+
+
+def test_agent_tool_calls_before_error_are_preserved(sample_df):
+    """Tool-call records and figures accumulated before a structural error are not discarded."""
+    mock_client = MagicMock()
+    # Round 1: valid tool call
+    tc = make_tool_call("call_1", "get_dataset_overview", {})
+    resp1 = make_completion(tool_calls=[tc])
+    # Round 2: malformed response (empty choices)
+    bad_resp = MagicMock()
+    bad_resp.choices = []
+    mock_client.chat.completions.create.side_effect = [resp1, bad_resp]
+
+    agent = AnalysisAgent(client=mock_client)
+    result = agent.run(sample_df, "Overview then fail.")
+
+    assert result.error is not None
+    assert len(result.tool_calls) == 1  # The first successful tool call is still present
+    assert result.tool_calls[0].tool_name == "get_dataset_overview"
+
+
+# ── 7. Argument Parsing Unit Tests ───────────────────────────────────────────
+
+def test_parse_tool_arguments_valid_dict():
+    """Pre-parsed dict passes through unchanged."""
+    args, err = _parse_tool_arguments({"top_n": 3}, "get_summary_statistics")
+    assert err is None
+    assert args == {"top_n": 3}
+
+
+def test_parse_tool_arguments_valid_json_string():
+    """Valid JSON object string is decoded to dict."""
+    args, err = _parse_tool_arguments('{"group_by": ["dept"]}', "group_and_aggregate")
+    assert err is None
+    assert args == {"group_by": ["dept"]}
+
+
+def test_parse_tool_arguments_empty_object():
+    """Empty JSON object '{}' is valid."""
+    args, err = _parse_tool_arguments("{}", "get_dataset_overview")
+    assert err is None
+    assert args == {}
+
+
+def test_parse_tool_arguments_malformed_json():
+    """Malformed JSON string produces a structured error dict."""
+    args, err = _parse_tool_arguments("NOT_VALID{", "filter_data")
+    assert err is not None
+    assert err["status"] == "error"
+    assert "Invalid JSON" in err["error"]
+    assert args == {}
+
+
+def test_parse_tool_arguments_json_array_is_rejected():
+    """A JSON array (not object) is invalid tool arguments."""
+    args, err = _parse_tool_arguments('["a", "b"]', "filter_data")
+    assert err is not None
+    assert err["status"] == "error"
+    assert "JSON object" in err["error"]
+    assert args == {}
+
+
+def test_parse_tool_arguments_json_scalar_is_rejected():
+    """A JSON scalar (number, string) is invalid tool arguments."""
+    args, err = _parse_tool_arguments("42", "filter_data")
+    assert err is not None
+    assert err["status"] == "error"
+    assert args == {}
+
+
+def test_parse_tool_arguments_none_type_is_rejected():
+    """None arguments produce a structured error."""
+    args, err = _parse_tool_arguments(None, "get_dataset_overview")
+    assert err is not None
+    assert err["status"] == "error"
+    assert "unexpected type" in err["error"]
+    assert args == {}
+
+
+def test_agent_non_dict_json_args_sends_error_to_model(sample_df):
+    """When the model sends a JSON array as args, error is returned to it for recovery."""
+    mock_client = MagicMock()
+    # Model sends a JSON array instead of an object
+    tc = make_tool_call("call_bad", "get_dataset_overview", '["wrong", "args"]')
+    resp1 = make_completion(tool_calls=[tc])
+    resp2 = make_completion(content="Recovered from bad args.")
+    mock_client.chat.completions.create.side_effect = [resp1, resp2]
+
+    agent = AnalysisAgent(client=mock_client)
+    result = agent.run(sample_df, "Send non-dict args.")
+
+    assert len(result.tool_calls) == 1
+    assert result.tool_calls[0].output["status"] == "error"
+    assert "JSON object" in result.tool_calls[0].output["error"]
+    assert result.answer == "Recovered from bad args."
+
+
+# ── 8. finish_reason Handling ────────────────────────────────────────────────
+
+def test_finish_reason_stop_is_normal_answer(sample_df):
+    """finish_reason='stop' with no tool_calls → accepted as a final text answer."""
+    mock_client = MagicMock()
+    resp = make_completion(content="Done.", finish_reason="stop")
+    mock_client.chat.completions.create.return_value = resp
+
+    agent = AnalysisAgent(client=mock_client)
+    result = agent.run(sample_df, "Simple question.")
+
+    assert result.answer == "Done."
+    assert result.error is None
+    assert result.rounds == 1
+
+
+def test_finish_reason_tool_calls_dispatches_tools(sample_df):
+    """finish_reason='tool_calls' triggers tool dispatch then final answer."""
+    mock_client = MagicMock()
+    tc = make_tool_call("call_1", "get_dataset_overview", {})
+    resp1 = make_completion(tool_calls=[tc], finish_reason="tool_calls")
+    resp2 = make_completion(content="Overview done.", finish_reason="stop")
+    mock_client.chat.completions.create.side_effect = [resp1, resp2]
+
+    agent = AnalysisAgent(client=mock_client)
+    result = agent.run(sample_df, "Give me an overview.")
+
+    assert result.error is None
+    assert result.answer == "Overview done."
+    assert len(result.tool_calls) == 1
+    assert result.tool_calls[0].tool_name == "get_dataset_overview"
+
+
+def test_finish_reason_length_produces_error(sample_df):
+    """finish_reason='length' produces a structured error; answer is not set."""
+    mock_client = MagicMock()
+    resp = make_completion(content="Truncated...", finish_reason="length")
+    mock_client.chat.completions.create.return_value = resp
+
+    agent = AnalysisAgent(client=mock_client)
+    result = agent.run(sample_df, "Long question.")
+
+    assert result.error is not None
+    assert "length" in result.error
+    assert "truncated" in result.error.lower() or "token" in result.error.lower()
+    assert result.answer == ""
+    assert result.rounds == 1
+
+
+def test_finish_reason_content_filter_produces_error(sample_df):
+    """finish_reason='content_filter' produces a structured error; answer is not set."""
+    mock_client = MagicMock()
+    resp = make_completion(content=None, finish_reason="content_filter")
+    mock_client.chat.completions.create.return_value = resp
+
+    agent = AnalysisAgent(client=mock_client)
+    result = agent.run(sample_df, "Sensitive query.")
+
+    assert result.error is not None
+    assert "content_filter" in result.error
+    assert "blocked" in result.error.lower() or "safety" in result.error.lower()
+    assert result.answer == ""
+    assert result.rounds == 1
+
+
+def test_finish_reason_none_with_no_tool_calls_treated_as_answer(sample_df):
+    """Missing finish_reason (None) with no tool_calls falls back to capturing text."""
+    mock_client = MagicMock()
+    resp = make_completion(content="Best-effort answer.", finish_reason=None)
+    mock_client.chat.completions.create.return_value = resp
+
+    agent = AnalysisAgent(client=mock_client)
+    result = agent.run(sample_df, "Question with no finish_reason.")
+
+    # None finish_reason with no tool_calls → captured as answer, no hard error
+    assert result.answer == "Best-effort answer."
+    assert result.rounds == 1
+
+
+def test_finish_reason_unknown_with_no_tool_calls_captures_content_with_notice(sample_df):
+    """Unknown finish_reason with no tool_calls: content captured but error notice set."""
+    mock_client = MagicMock()
+    resp = make_completion(content="Some content.", finish_reason="function_call_deprecated")
+    mock_client.chat.completions.create.return_value = resp
+
+    agent = AnalysisAgent(client=mock_client)
+    result = agent.run(sample_df, "Question.")
+
+    assert result.answer == "Some content."
+    # An unexpected finish_reason that is not "stop"/"tool_calls"/None should be flagged
+    assert result.error is not None
+    assert "finish_reason" in result.error
+
+
+def test_finish_reason_length_preserves_prior_tool_records(sample_df):
+    """Tool records accumulated before a 'length' error are preserved in the result."""
+    mock_client = MagicMock()
+    tc = make_tool_call("call_1", "get_dataset_overview", {})
+    resp1 = make_completion(tool_calls=[tc], finish_reason="tool_calls")
+    resp2 = make_completion(content="Partial...", finish_reason="length")
+    mock_client.chat.completions.create.side_effect = [resp1, resp2]
+
+    agent = AnalysisAgent(client=mock_client)
+    result = agent.run(sample_df, "Overview then truncate.")
+
+    assert result.error is not None
+    assert "length" in result.error
+    assert result.answer == ""
+    assert len(result.tool_calls) == 1   # Round-1 record is still present
+    assert result.tool_calls[0].tool_name == "get_dataset_overview"
+
+
+# ── 9. Tool-Call Entry Validation ────────────────────────────────────────────
+
+def test_validate_tool_call_entry_valid():
+    """Structurally valid tool-call entry returns all fields without error."""
+    tc = MagicMock()
+    tc.id = "call_abc"
+    tc.function.name = "get_dataset_overview"
+    tc.function.arguments = "{}"
+
+    tool_name, call_id, raw_args, err = _validate_tool_call_entry(tc)
+
+    assert err is None
+    assert tool_name == "get_dataset_overview"
+    assert call_id == "call_abc"
+    assert raw_args == "{}"
+
+
+def test_validate_tool_call_entry_missing_id():
+    """Missing call ID is detected and reported."""
+    tc = MagicMock()
+    tc.id = None
+    tc.function.name = "get_dataset_overview"
+    tc.function.arguments = "{}"
+
+    tool_name, call_id, raw_args, err = _validate_tool_call_entry(tc)
+
+    assert err is not None
+    assert "id" in err.lower() or "missing" in err.lower()
+    assert raw_args is None
+
+
+def test_validate_tool_call_entry_missing_function():
+    """Missing function attribute is detected and reported."""
+    tc = MagicMock()
+    tc.id = "call_x"
+    tc.function = None
+
+    tool_name, call_id, raw_args, err = _validate_tool_call_entry(tc)
+
+    assert err is not None
+    assert "function" in err.lower()
+    assert raw_args is None
+
+
+def test_validate_tool_call_entry_missing_function_name():
+    """Empty/None function name is detected and reported."""
+    tc = MagicMock()
+    tc.id = "call_y"
+    tc.function.name = None
+    tc.function.arguments = "{}"
+
+    tool_name, call_id, raw_args, err = _validate_tool_call_entry(tc)
+
+    assert err is not None
+    assert "name" in err.lower() or "missing" in err.lower()
+    assert raw_args is None
+
+
+def test_agent_malformed_tc_missing_id_breaks_loop(sample_df):
+    """A tool-call entry with a missing ID causes a structured error, not a crash."""
+    mock_client = MagicMock()
+
+    bad_tc = MagicMock()
+    bad_tc.id = None            # Invalid: no call ID
+    bad_tc.function.name = "get_dataset_overview"
+    bad_tc.function.arguments = "{}"
+
+    resp = make_completion(tool_calls=[bad_tc], finish_reason="tool_calls")
+    mock_client.chat.completions.create.return_value = resp
+
+    agent = AnalysisAgent(client=mock_client)
+    result = agent.run(sample_df, "Malformed tool-call ID.")
+
+    assert result.error is not None
+    assert result.answer == ""
+    assert result.rounds == 1
+
+
+def test_agent_malformed_tc_missing_function_name_breaks_loop(sample_df):
+    """A tool-call entry with a missing function name causes a structured error, not a crash."""
+    mock_client = MagicMock()
+
+    bad_tc = MagicMock()
+    bad_tc.id = "call_z"
+    bad_tc.function.name = None    # Invalid: no tool name
+    bad_tc.function.arguments = "{}"
+
+    resp = make_completion(tool_calls=[bad_tc], finish_reason="tool_calls")
+    mock_client.chat.completions.create.return_value = resp
+
+    agent = AnalysisAgent(client=mock_client)
+    result = agent.run(sample_df, "Malformed function name.")
+
+    assert result.error is not None
+    assert result.answer == ""
+    assert result.rounds == 1

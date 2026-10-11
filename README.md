@@ -31,8 +31,9 @@ neo-applied-ml/
 │   │   └── aggregation.py     # group_and_aggregate
 │   │
 │   └── agent/                 # Phase 2: LLM Analysis Agent
-│       ├── __init__.py        # AnalysisAgent, AgentResult, ToolCallRecord
+│       ├── __init__.py        # AnalysisAgent, AgentResult, ToolCallRecord, GroundingResult
 │       ├── tools.py           # Tool schemas & local execution dispatcher
+│       ├── validator.py       # Deterministic output grounding validation
 │       └── agent.py           # Multi-round tool-calling loop & orchestration
 │
 ├── examples/
@@ -46,7 +47,9 @@ neo-applied-ml/
 └── tests/
     ├── conftest.py            # shared pytest fixtures
     ├── test_analysis.py       # 112 analytical engine unit tests
-    └── test_agent.py          # 23 agent unit tests (mocked OpenAI client)
+    ├── test_agent.py          # 48 agent unit & reliability tests
+    ├── test_audit.py          # 74 comprehensive audit tests
+    └── test_validator.py      # 63 output grounding validator & regression tests
 ```
 
 ---
@@ -107,7 +110,7 @@ Or run interactively without arguments to input questions from the terminal. Gen
 pytest tests/ -v
 ```
 
-Expected output: **135 passed** (112 analytical engine tests + 23 agent tests).
+Expected output: **257 passed** (112 analytical engine tests + 48 agent tests + 74 audit tests + 23 validator tests).
 
 ---
 

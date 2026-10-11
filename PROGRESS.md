@@ -153,15 +153,17 @@ The agent is decoupled into two clean modules without external agent frameworks:
 ### Pytest Execution History
 
 - **Phase 1 Test Suite:** 112 passed in 0.63s
-- **Phase 2 Step 1 Agent Suite (`tests/test_agent.py`):** 23 passed in 0.70s
-- **Complete Suite:** **135 passed in 1.42s** (0 regressions, 0 warnings/failures).
+- **Phase 2 Step 1 Initial Agent Suite (`tests/test_agent.py`):** 23 passed in 0.70s (135 total)
+- **Phase 2 Hardening Passes (`tests/test_agent.py` expanded to 48 tests):** 160 passed in 1.85s
+- **Phase 2 Comprehensive Testing & Audit Pass (`tests/test_audit.py` added with 74 tests):** 234 passed in 1.59s
+- **Phase 2 Output Grounding Validator (`app/agent/validator.py` + `tests/test_validator.py` with 23 tests):** **257 passed in 2.00s** (0 regressions, 0 warnings/failures).
 
-### Agent Test Coverage (`tests/test_agent.py`)
+### Agent Test Coverage (`tests/test_agent.py`, `tests/test_audit.py`, `tests/test_validator.py`)
 
 - All 6 tool schemas validated for structure, parameters, and descriptions.
 - Individual tool dispatch and execution for each analytical function.
-- Unknown tool handling and rejection.
-- Tool execution error handling (e.g., non-existent columns).
+- Unknown tool handling, rejection of arbitrary code/command tools (`eval`, `exec`, `os.system`, `subprocess`, etc.).
+- Tool execution error handling (e.g., non-existent columns, invalid operators, unsupported aggregations).
 - JSON serialization of NumPy types, NaNs, infinities, and missing values.
 - Dataset metadata builder without whole-dataset transmission.
 - End-to-end tool-calling loop (question -> tool call -> tool result -> final answer).
@@ -172,9 +174,38 @@ The agent is decoupled into two clean modules without external agent frameworks:
 - Strict input DataFrame immutability assertion.
 - Malformed JSON argument resilience and error propagation to the model.
 - Maximum round limit (`max_rounds`) enforcement.
-- OpenAI API exception handling (`OpenAIError`).
+- OpenAI API exception handling (`OpenAIError`, `AuthenticationError`, `APITimeoutError`).
 - Missing API key detection with clear configuration error.
-- Full `AgentResult.to_dict()` structure contract.
+- Full `AgentResult.to_dict()` structure contract with `is_success`, `is_verified`, `is_flagged`, and `grounding` serialization.
+- Full 14-scenario hallucination resistance audit (mocked model).
+- Full 24-case failure transparency audit (finish_reason, API errors, malformed responses).
+- Full independent analytical validation on `examples/employee_analytics.csv` (12 metrics computed directly via pandas).
+- 63 output grounding validator & adversarial regression tests (`tests/test_validator.py`).
+
+---
+
+## Phase 2 Output Grounding Validator (Iteration 1) ✅ COMPLETE
+
+### Architecture & Capabilities (`app/agent/validator.py`)
+
+1. **Three Grounding Statuses:**
+   - `VERIFIED`: Specific factual/numerical claims examined in the answer match the relevant tool outputs.
+   - `FLAGGED`: Concrete inconsistencies, false success claims, unperformed statistical significance claims, causal assertions based on correlation, or contradictions were detected.
+   - `UNVERIFIABLE`: Answer contains qualitative, derived, or speculative natural-language statements that cannot be deterministically verified or refuted using the available tool outputs. (UNVERIFIABLE is not treated as incorrect).
+
+2. **Deterministic Checks Implemented:**
+   - **Tool Failure Consistency:** Tracks unresolved tool failures vs recovered retries; flags answers that falsely claim failed tools succeeded, while preserving honest failure explanations.
+   - **Numerical Consistency:** Verifies and normalizes numbers (commas, decimals, currency symbols) against explicit group metrics in `group_and_aggregate`, row counts in `filter_data`, dimensions in `get_dataset_overview`, and coefficients in `analyze_correlations`. Detects and flags explicit contradictions without matching numbers from unrelated tools.
+   - **Unsupported Analytical Claims:** Detects and flags claims of statistical significance / p-values (no engine tool computes p-values) and causal claims based on correlation.
+   - **Visualization Verification:** Flags answers claiming a chart was created when `len(figures) == 0`.
+   - **Negation Awareness:** Distinguishes honest disclaimers ("no statistical significance was found", "does not prove causation") from positive claims.
+
+3. **Status & Success Semantics (`AgentResult`):**
+   - `execution_success`: boolean indicating whether the execution loop succeeded without error.
+   - `is_success`: `True` only if execution succeeded AND the answer was not flagged (`execution_success and not is_flagged`).
+   - `is_verified`: `True` if execution succeeded and grounding was explicitly `VERIFIED`.
+   - `is_flagged`: `True` if grounding flagged a concrete inconsistency.
+   - `error`: strictly preserved for execution errors (`None` when only semantic grounding flags are raised), preventing conflation.
 
 ---
 
@@ -183,6 +214,7 @@ The agent is decoupled into two clean modules without external agent frameworks:
 - Single-turn analysis only (no conversational multi-turn session memory yet).
 - No streaming tokens (completions evaluated synchronously per round).
 - Single LLM provider supported (official OpenAI SDK).
+- Deterministic checks cannot verify arbitrary open-ended natural-language reasoning (such answers are safely classified as `UNVERIFIABLE`).
 - Streamlit UI planned for Phase 3.
 
 ---

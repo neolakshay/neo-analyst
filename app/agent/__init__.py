@@ -8,6 +8,7 @@ and tool calling.
 
 from app.agent.agent import AnalysisAgent, AgentResult, ToolCallRecord
 from app.agent.tools import TOOL_SCHEMAS, execute_tool
+from app.agent.validator import GroundingStatus, GroundingResult, validate_grounding
 
 __all__ = [
     "AnalysisAgent",
@@ -15,4 +16,7 @@ __all__ = [
     "ToolCallRecord",
     "TOOL_SCHEMAS",
     "execute_tool",
+    "GroundingStatus",
+    "GroundingResult",
+    "validate_grounding",
 ]
