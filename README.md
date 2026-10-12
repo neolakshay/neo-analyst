@@ -77,5 +77,5 @@ python -m examples.demo
 python -m examples.agent_demo "Which department has the highest average salary?"
 
 # Web interface
-streamlit run app/ui/app.py
+python -m streamlit run app/ui/app.py
 ```
