@@ -531,69 +531,124 @@ def validate_grounding(
         elif tool_name == "analyze_correlations":
             matrix = output.get("matrix")
             if isinstance(matrix, dict):
-                # Check for explicit correlation value citation
-                corr_val_match = re.search(
-                    r'\b(?:correlation(?:\s+coefficient)?\s+(?:of|is|was|between\s+[\w\s]+\s+is)\s*[:=]?\s*|r\s*=\s*)([-+]?0?\.\d+|\b[-+]?1(?:\.0+)?\b)',
-                    clean_answer,
-                    re.IGNORECASE,
-                )
-                if corr_val_match and not _is_negated_in_clause(clean_answer, corr_val_match.start()):
-                    claimed_r = _clean_and_parse_number(corr_val_match.group(1))
-                    raw_str = corr_val_match.group(1)
-                    if claimed_r is not None:
-                        # Find matching column pair discussed
-                        found_pair_match = False
-                        for col1, row_dict in matrix.items():
-                            if not isinstance(row_dict, dict):
-                                continue
-                            for col2, exp_r in row_dict.items():
-                                if col1 != col2 and isinstance(exp_r, (int, float)):
-                                    if math.isnan(exp_r) or math.isinf(exp_r):
-                                        continue
-                                    if _column_matches_text(col1, clean_answer) and _column_matches_text(col2, clean_answer):
-                                        dec_places = len(raw_str.split('.')[-1]) if '.' in raw_str else 0
-                                        is_one_dec = dec_places == 1
-                                        matches_precision = (
-                                            _is_close(claimed_r, float(exp_r), abs_tol=0.01)
-                                            or (is_one_dec and claimed_r == round(float(exp_r), 1))
-                                        )
-                                        if matches_precision:
-                                            claims_checked.append(
-                                                f"Correlation between {col1} and {col2} ({exp_r}) matches answer"
-                                            )
-                                            found_pair_match = True
-                                            break
-                                        else:
-                                            flags.append(
-                                                f"Numerical contradiction: Correlation between {col1} and {col2} "
-                                                f"reported as {claimed_r}, expected {exp_r}."
-                                            )
-                                            found_pair_match = True
-                                            break
-                            if found_pair_match:
-                                break
-
-                # Check direction (positive vs negative)
+                # Extract unique pairs (unordered unique pairs, avoiding symmetric duplicates)
+                unique_pairs: List[Tuple[str, str, float]] = []
+                seen_pairs: set = set()
                 for col1, row_dict in matrix.items():
                     if not isinstance(row_dict, dict):
                         continue
                     for col2, exp_r in row_dict.items():
-                        if col1 != col2 and isinstance(exp_r, (int, float)) and not math.isnan(exp_r):
-                            if _column_matches_text(col1, clean_answer) and _column_matches_text(col2, clean_answer):
-                                if exp_r < -0.2 and re.search(r'\bpositive\s+correlation\b', clean_answer, re.IGNORECASE):
-                                    pos_idx = clean_answer.lower().find("positive correlation")
-                                    if not _is_negated_in_clause(clean_answer, pos_idx):
-                                        flags.append(
-                                            f"Directional contradiction: Tool returned negative correlation ({exp_r}) "
-                                            f"between {col1} and {col2}, but answer asserts positive correlation."
-                                        )
-                                elif exp_r > 0.2 and re.search(r'\bnegative\s+correlation\b', clean_answer, re.IGNORECASE):
-                                    neg_idx = clean_answer.lower().find("negative correlation")
-                                    if not _is_negated_in_clause(clean_answer, neg_idx):
-                                        flags.append(
-                                            f"Directional contradiction: Tool returned positive correlation ({exp_r}) "
-                                            f"between {col1} and {col2}, but answer asserts negative correlation."
-                                        )
+                        if col1 == col2 or not isinstance(exp_r, (int, float)) or math.isnan(exp_r) or math.isinf(exp_r):
+                            continue
+                        pair_key = tuple(sorted([col1, col2]))
+                        if pair_key in seen_pairs:
+                            continue
+                        seen_pairs.add(pair_key)
+                        unique_pairs.append((col1, col2, float(exp_r)))
+
+                # Split answer into segments (lines, bullet points, sentences, independent/contrastive clauses)
+                clause_pattern = (
+                    r'[\n;]+|[.!?](?:\s+|$)'
+                    r'|,\s*(?:and|but|whereas|while|however|in contrast)\s*'
+                    r'|\s+(?:whereas|while|in contrast)\s*'
+                    r'|\s+and\s+(?:a\s+|there\s+is\s+a\s+)?(?:positive|negative|no\s+correlation)\b'
+                )
+                segments = [
+                    s.strip()
+                    for s in re.split(clause_pattern, clean_answer, flags=re.IGNORECASE)
+                    if s.strip()
+                ]
+
+                for col1, col2, exp_r in unique_pairs:
+                    # Find segments mentioning both columns
+                    pair_segments = [
+                        s for s in segments
+                        if _column_matches_text(col1, s) and _column_matches_text(col2, s)
+                    ]
+
+                    # If only 1 pair exists and both columns appear in answer, allow full answer as fallback
+                    if not pair_segments and len(unique_pairs) == 1:
+                        if _column_matches_text(col1, clean_answer) and _column_matches_text(col2, clean_answer):
+                            pair_segments = [clean_answer]
+
+                    if not pair_segments:
+                        continue
+
+                    target_text = " ".join(pair_segments)
+
+                    # Check for explicit correlation value citation in the context of this pair
+                    corr_val_matches = list(re.finditer(
+                        r'(?:\b(?:correlation(?:\s+coefficient)?\s+(?:of|is|was|between\s+[\w\s]+\s+is)?|r)\s*[:=]?\s*|[:]\s*)'
+                        r'([-+]?0?\.\d+|\b[-+]?1(?:\.0+)?\b)',
+                        target_text,
+                        re.IGNORECASE,
+                    ))
+                    has_matching_r = False
+                    contradictory_r = []
+
+                    for m in corr_val_matches:
+                        if not _is_negated_in_clause(target_text, m.start()):
+                            claimed_r = _clean_and_parse_number(m.group(1))
+                            raw_str = m.group(1)
+                            if claimed_r is not None:
+                                dec_places = len(raw_str.split('.')[-1]) if '.' in raw_str else 0
+                                is_one_dec = dec_places == 1
+                                matches_precision = (
+                                    _is_close(claimed_r, exp_r, abs_tol=0.01)
+                                    or (is_one_dec and claimed_r == round(exp_r, 1))
+                                )
+                                if matches_precision:
+                                    has_matching_r = True
+                                else:
+                                    contradictory_r.append(claimed_r)
+
+                    if has_matching_r:
+                        claims_checked.append(
+                            f"Correlation between {col1} and {col2} ({exp_r}) matches answer"
+                        )
+                    elif contradictory_r:
+                        claimed_r = contradictory_r[0]
+                        flags.append(
+                            f"Numerical contradiction: Correlation between {col1} and {col2} "
+                            f"reported as {claimed_r}, expected {exp_r}."
+                        )
+
+                    # Check direction assertions localized to this pair's context
+                    pos_match = re.search(
+                        r'\b(?:positive\s+(?:correlation|relationship)|positively\s+correlated|positive)\b',
+                        target_text,
+                        re.IGNORECASE,
+                    )
+                    neg_match = re.search(
+                        r'\b(?:negative\s+(?:correlation|relationship)|negatively\s+correlated|negative)\b',
+                        target_text,
+                        re.IGNORECASE,
+                    )
+
+                    is_pos_negated = pos_match and (
+                        _is_negated_in_clause(target_text, pos_match.start())
+                        or bool(re.search(r'\b(?:not|no|neither|never|without)(?:\s+a)?\s*$', target_text[:pos_match.start()].strip(), re.I))
+                    )
+                    has_pos_claim = bool(pos_match and not is_pos_negated)
+
+                    is_neg_negated = neg_match and (
+                        _is_negated_in_clause(target_text, neg_match.start())
+                        or bool(re.search(r'\b(?:not|no|neither|never|without)(?:\s+a)?\s*$', target_text[:neg_match.start()].strip(), re.I))
+                    )
+                    has_neg_claim = bool(neg_match and not is_neg_negated)
+
+                    if exp_r < -0.2:
+                        if has_pos_claim and not has_neg_claim:
+                            flags.append(
+                                f"Directional contradiction: Tool returned negative correlation ({exp_r}) "
+                                f"between {col1} and {col2}, but answer asserts positive correlation."
+                            )
+                    elif exp_r > 0.2:
+                        if has_neg_claim and not has_pos_claim:
+                            flags.append(
+                                f"Directional contradiction: Tool returned positive correlation ({exp_r}) "
+                                f"between {col1} and {col2}, but answer asserts negative correlation."
+                            )
 
         # 6d. Check get_dataset_overview dimensions
         elif tool_name == "get_dataset_overview":

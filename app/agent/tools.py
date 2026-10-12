@@ -137,7 +137,8 @@ TOOL_SCHEMAS = [
             "name": "analyze_correlations",
             "description": (
                 "Compute pairwise Pearson correlation coefficients between numeric columns. "
-                "Returns the correlation matrix and the top positive (r > 0) and top negative (r < 0) pairs."
+                "Returns the correlation matrix ('matrix'), pairwise complete observation counts ('pair_counts'), "
+                "and the top positive (r > 0) and top negative (r < 0) pairs."
             ),
             "parameters": {
                 "type": "object",

@@ -134,6 +134,8 @@ def test_execute_analyze_correlations(sample_df):
     model_out, raw_out = execute_tool(sample_df, "analyze_correlations", args)
     assert "matrix" in model_out
     assert "top_positive" in model_out
+    assert "pair_counts" in model_out
+    assert model_out["pair_counts"]["salary"]["rating"] == 5
     assert isinstance(raw_out, dict)
 
 
@@ -1024,3 +1026,60 @@ def test_tool_schema_and_system_prompt_instruct_aggregation_keys(ground_truth_20
     assert "group_and_aggregate" in sys_prompt
     assert "existing" in sys_prompt.lower()
     assert "retry" in sys_prompt.lower() or "error" in sys_prompt.lower()
+
+
+def test_tool_schema_and_system_prompt_instruct_correlation_pair_counts(ground_truth_20x6_df):
+    """Bug A regression: verify schema and system prompt instruct model on reporting pair_counts."""
+    schema = next(s for s in TOOL_SCHEMAS if s["function"]["name"] == "analyze_correlations")
+    fn = schema["function"]
+    assert "pair_counts" in fn["description"]
+
+    agent = AnalysisAgent()
+    sys_prompt = agent._create_system_prompt(ground_truth_20x6_df)
+    assert "pair_counts" in sys_prompt
+    assert "pairwise count" in sys_prompt.lower()
+
+
+def test_agent_correlation_pair_counts_reported_on_generalization_dataset():
+    """Bug A regression: verify agent runs analyze_correlations and receives pairwise counts 14, 14, 13."""
+    import pathlib
+    gen_path = pathlib.Path(__file__).resolve().parent.parent / "examples" / "generalization_test.csv"
+    gen_df = pd.read_csv(gen_path)
+
+    mock_client = MagicMock()
+    tc = make_tool_call(
+        "call_corr",
+        "analyze_correlations",
+        {"columns": ["years_experience", "monthly_salary", "satisfaction_score"]},
+    )
+    resp1 = make_completion(tool_calls=[tc])
+    resp2 = make_completion(
+        content=(
+            "Analysis results:\n"
+            "- years_experience and monthly_salary have a strong positive correlation of 0.99 (14 paired observations).\n"
+            "- years_experience and satisfaction_score have a strong negative correlation of -0.97 (14 paired observations).\n"
+            "- monthly_salary and satisfaction_score have a strong negative correlation of -0.98 (13 paired observations)."
+        )
+    )
+    mock_client.chat.completions.create.side_effect = [resp1, resp2]
+
+    agent = AnalysisAgent(client=mock_client)
+    result = agent.run(
+        gen_df,
+        "Calculate correlations and paired observations between years_experience, monthly_salary, and satisfaction_score.",
+    )
+
+    assert result.execution_success is True
+    assert result.rounds == 2
+    assert len(result.tool_calls) == 1
+
+    tool_out = result.tool_calls[0].output
+    assert "pair_counts" in tool_out
+    assert tool_out["pair_counts"]["years_experience"]["monthly_salary"] == 14
+    assert tool_out["pair_counts"]["years_experience"]["satisfaction_score"] == 14
+    assert tool_out["pair_counts"]["monthly_salary"]["satisfaction_score"] == 13
+
+    # Grounding validator verifies without false flags
+    assert result.is_flagged is False
+    assert result.is_verified is True
+

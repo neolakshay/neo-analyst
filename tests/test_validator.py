@@ -828,3 +828,99 @@ class TestValidatorAdversarialRegression:
         assert res.status == GroundingStatus.UNVERIFIABLE
         assert res.is_flagged is False
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 11. Bug B Regressions: Directional Correlation Validation
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestCorrelationDirectionalValidationRegressions:
+    """Regression tests ensuring mixed-direction correlation answers are validated
+
+    without cross-pair contamination or symmetric duplicate flags.
+    """
+
+    @pytest.fixture
+    def mixed_corr_tc(self):
+        """Tool record with both positive and negative correlation pairs."""
+        return make_tc_record(
+            "analyze_correlations",
+            {
+                "status": "success",
+                "matrix": {
+                    "years_experience": {
+                        "years_experience": 1.0,
+                        "monthly_salary": 0.89,
+                        "satisfaction_score": -0.40,
+                    },
+                    "monthly_salary": {
+                        "years_experience": 0.89,
+                        "monthly_salary": 1.0,
+                        "satisfaction_score": -0.52,
+                    },
+                    "satisfaction_score": {
+                        "years_experience": -0.40,
+                        "monthly_salary": -0.52,
+                        "satisfaction_score": 1.0,
+                    },
+                },
+            },
+        )
+
+    def test_correct_mixed_direction_correlations_not_flagged(self, mixed_corr_tc):
+        """Answer accurately stating mixed positive and negative relationships is NOT flagged."""
+        answer = (
+            "We found a positive correlation between years_experience and monthly_salary (r = 0.89). "
+            "In contrast, there is a negative correlation between monthly_salary and satisfaction_score (r = -0.52), "
+            "and a negative correlation between years_experience and satisfaction_score (r = -0.40)."
+        )
+        res = validate_grounding(answer, tool_call_records=[mixed_corr_tc])
+
+        assert res.status == GroundingStatus.VERIFIED
+        assert res.is_flagged is False
+        assert res.is_verified is True
+        assert res.details.get("flags_count", 0) == 0
+
+    def test_genuine_directional_contradiction_is_flagged(self, mixed_corr_tc):
+        """When an answer misstates the direction of one pair in a mixed context, it IS flagged."""
+        answer = (
+            "There is a negative correlation between years_experience and monthly_salary. "
+            "Additionally, there is a negative correlation between monthly_salary and satisfaction_score."
+        )
+        res = validate_grounding(answer, tool_call_records=[mixed_corr_tc])
+
+        assert res.status == GroundingStatus.FLAGGED
+        assert res.is_flagged is True
+        assert res.is_verified is False
+
+        # Directional contradiction specifically flags the incorrect pair
+        contradictions = [r for r in res.reasons if "Directional contradiction" in r]
+        assert len(contradictions) == 1
+        assert "years_experience" in contradictions[0]
+        assert "monthly_salary" in contradictions[0]
+        # The correct negative pair is NOT flagged
+        assert not any("satisfaction_score" in r and "Directional contradiction" in r for r in res.reasons)
+
+    def test_no_duplicate_or_symmetric_contradiction_flags(self, mixed_corr_tc):
+        """A single contradicting pair generates exactly one flag, not symmetric duplicates (A-B and B-A)."""
+        answer = "The analysis shows a positive correlation between monthly_salary and satisfaction_score."
+        res = validate_grounding(answer, tool_call_records=[mixed_corr_tc])
+
+        assert res.status == GroundingStatus.FLAGGED
+        contradictions = [r for r in res.reasons if "Directional contradiction" in r]
+        assert len(contradictions) == 1
+
+    def test_each_relationship_checked_against_correct_claim(self, mixed_corr_tc):
+        """Claims about pair A do not contaminate checks for pair B in separate clauses."""
+        answer = (
+            "First, years_experience and monthly_salary have a strong positive relationship. "
+            "Second, monthly_salary and satisfaction_score have a positive relationship."
+        )
+        res = validate_grounding(answer, tool_call_records=[mixed_corr_tc])
+
+        assert res.status == GroundingStatus.FLAGGED
+        # Only monthly_salary vs satisfaction_score should be flagged
+        flagged_pairs = [r for r in res.reasons if "Directional contradiction" in r]
+        assert len(flagged_pairs) == 1
+        assert "satisfaction_score" in flagged_pairs[0]
+
+

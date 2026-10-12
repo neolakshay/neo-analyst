@@ -38,6 +38,7 @@ def analyze_correlations(
     dict with keys:
         "columns_used"   – list of columns that were included
         "matrix"         – {col: {col: correlation}} – the full correlation matrix
+        "pair_counts"    – {col: {col: count}} – pairwise complete observation counts
         "top_positive"   – [(col_a, col_b, r)] top positive pairs, sorted desc
         "top_negative"   – [(col_a, col_b, r)] top negative pairs, sorted asc
         "warning"        – string or None – e.g. if fewer than 2 numeric cols
@@ -78,6 +79,7 @@ def analyze_correlations(
         return {
             "columns_used": numeric_cols,
             "matrix": {},
+            "pair_counts": {},
             "top_positive": [],
             "top_negative": [],
             "warning": (
@@ -96,6 +98,17 @@ def analyze_correlations(
             for other, val in row.items()
         }
         for col, row in corr_matrix.to_dict().items()
+    }
+
+    # ── Compute pairwise complete observation counts ──────────────────────────
+    valid_mask = df[numeric_cols].notna().astype(int)
+    counts_matrix = valid_mask.T.dot(valid_mask)
+    pair_counts_dict: dict = {
+        col: {
+            other: int(counts_matrix.loc[col, other])
+            for other in numeric_cols
+        }
+        for col in numeric_cols
     }
 
     # ── Extract unique pairs (upper triangle, excluding diagonal) ─────────────
@@ -122,6 +135,7 @@ def analyze_correlations(
     return {
         "columns_used": numeric_cols,
         "matrix": matrix_dict,
+        "pair_counts": pair_counts_dict,
         "top_positive": top_positive,
         "top_negative": top_negative,
         "warning": warning,

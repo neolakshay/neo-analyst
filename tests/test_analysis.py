@@ -262,8 +262,52 @@ class TestAnalyzeCorrelations:
     def test_returns_dict_with_expected_keys(self, clean_df):
         result = analyze_correlations(clean_df)
         assert set(result.keys()) == {
-            "columns_used", "matrix", "top_positive", "top_negative", "warning"
+            "columns_used", "matrix", "pair_counts", "top_positive", "top_negative", "warning"
         }
+
+    def test_pair_counts_generalization_dataset(self):
+        """Verify exact pairwise complete observation counts on generalization dataset."""
+        import pathlib
+        gen_path = pathlib.Path(__file__).resolve().parent.parent / "examples" / "generalization_test.csv"
+        df = pd.read_csv(gen_path)
+        result = analyze_correlations(df)
+
+        counts = result["pair_counts"]
+        assert counts["years_experience"]["monthly_salary"] == 14
+        assert counts["years_experience"]["satisfaction_score"] == 14
+        assert counts["monthly_salary"]["satisfaction_score"] == 13
+
+        # Symmetry
+        assert counts["monthly_salary"]["years_experience"] == 14
+        assert counts["satisfaction_score"]["years_experience"] == 14
+        assert counts["satisfaction_score"]["monthly_salary"] == 13
+
+        # Pearson coefficients computed correctly with pairwise deletion
+        exp_corr = df[["years_experience", "monthly_salary", "satisfaction_score"]].corr(method="pearson")
+        assert result["matrix"]["years_experience"]["monthly_salary"] == pytest.approx(
+            exp_corr.loc["years_experience", "monthly_salary"], abs=1e-4
+        )
+        assert result["matrix"]["monthly_salary"]["satisfaction_score"] == pytest.approx(
+            exp_corr.loc["monthly_salary", "satisfaction_score"], abs=1e-4
+        )
+
+    def test_pair_counts_symmetry_and_types(self, clean_df):
+        """Pair counts must be non-negative integers and symmetric across variables."""
+        result = analyze_correlations(clean_df)
+        counts = result["pair_counts"]
+        for col_a in result["columns_used"]:
+            for col_b in result["columns_used"]:
+                val = counts[col_a][col_b]
+                assert isinstance(val, int)
+                assert val == counts[col_b][col_a]
+                assert val == len(clean_df)  # clean_df has no missing values
+
+    def test_pair_counts_single_numeric_column_warning(self, single_col_df):
+        """When fewer than 2 numeric columns exist, pair_counts is an empty dict."""
+        result = analyze_correlations(single_col_df)
+        assert result["pair_counts"] == {}
+        assert result["matrix"] == {}
+        assert result["warning"] is not None
 
     def test_perfect_positive_correlation(self, clean_df):
         # y = 2*x, so x↔y should be r = 1.0
