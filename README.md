@@ -5,13 +5,23 @@
 A tool-using data analysis agent that answers natural-language questions about CSV datasets using Python-based analytics and an LLM.
 
 ## Features
-- Six analytical tools: overview, statistics, filtering, correlation, visualization, and aggregation.
+- Six analytical tools
 - Multi-step LLM agent that selects and executes tools.
 - Grounding validator for checking numerical claims and contradictions.
 - Streamlit interface for uploading datasets and exploring results.
 
+## Analytical Tools
+
+- `get_dataset_overview`: Inspects dataset structure, columns, and data types.
+- `get_summary_statistics`: Computes descriptive statistics for numerical data.
+- `filter_data`: Filters rows using specified conditions.
+- `analyze_correlations`: Measures relationships between numerical variables.
+- `generate_visualization`: Generates Plotly charts from the dataset.
+- `group_and_aggregate`: Groups rows and calculates aggregate values.
+
 ## Tech Stack
 Python, Pandas, NumPy, Plotly, OpenAI API, Streamlit, Pytest.
+
 
 ## Project structure
 
