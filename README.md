@@ -1,6 +1,6 @@
-# neo-applied-ml
+# neo-analyst
 
-**Not your regular Applied ML project *(or maybe)*,** built for BYTE's Basic Applied ML task-01
+**Not your regular Applied ML project *(or maybe)*.**
 
 A tool-using data analysis agent that answers natural-language questions about CSV datasets using Python-based analytics and an LLM.
 
@@ -16,7 +16,7 @@ Python, Pandas, NumPy, Plotly, OpenAI API, Streamlit, Pytest.
 ## Project structure
 
 ```
-neo-applied-ml/
+neo-analyst/
 ├── app/
 │   ├── analysis/       # Six analytical tools
 │   ├── agent/          # LLM agent and grounding validator
@@ -32,8 +32,8 @@ neo-applied-ml/
 ## Setup
 
 ```bash
-git clone https://github.com/neolakshay/neo-applied-ml.git
-cd neo-applied-ml
+git clone https://github.com/neolakshay/neo-analyst.git
+cd neo-analyst
 
 python -m venv .venv
 ```
